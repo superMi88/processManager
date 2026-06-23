@@ -57,9 +57,10 @@ jobs:
             # Check if git repository is present, if not clone it
             if [ ! -d ".git" ]; then
               echo "Git-Repository nicht initialisiert. Klone..."
-              git clone git@github.com:${{ github.repository }}.git . || exit 1
+              git clone https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git . || exit 1
             else
-              # Fetch latest changes
+              # Update remote URL with the fresh temporary GITHUB_TOKEN
+              git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git || exit 1
               git pull origin main || exit 1
             fi
             
