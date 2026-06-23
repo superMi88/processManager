@@ -64,6 +64,34 @@ jobs:
               git pull origin main || exit 1
             fi
             
+            # Create .env if it does not exist
+            if [ ! -f ".env" ]; then
+              echo "Erstelle .env Datei auf dem Server..."
+              RANDOM_SECRET=$(openssl rand -hex 32 2>/dev/null || echo "fallback-secret-phrase-that-is-at-least-32-chars-long")
+              
+              ENV_PASS="${{ secrets.AUTH_PASSWORD }}"
+              if [ -z "$ENV_PASS" ]; then
+                # Generate a random 12-char password
+                ENV_PASS=$(openssl rand -base64 12 2>/dev/null | tr -dc 'a-zA-Z0-9' | head -c 12 || echo "admin123")
+                echo "========================================="
+                echo "Generiertes Passwort fuer Dashboard: $ENV_PASS"
+                echo "Du kannst dieses Passwort in /home/processManager/.env aendern."
+                echo "========================================="
+              fi
+              
+              ENV_EMAIL="${{ secrets.AUTH_EMAIL }}"
+              if [ -z "$ENV_EMAIL" ]; then
+                ENV_EMAIL="admin@admin.com"
+              fi
+              
+              echo "PORT=${{ secrets.SERVER_PORT || 3500 }}" > .env
+              echo "AUTH_EMAIL=$ENV_EMAIL" >> .env
+              echo "AUTH_PASSWORD=$ENV_PASS" >> .env
+              echo "AUTH_SECRET=$RANDOM_SECRET" >> .env
+              echo "NODE_ENV=production" >> .env
+              chmod 600 .env
+            fi
+            
             # Install production dependencies
             npm install --omit=dev
             
