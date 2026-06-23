@@ -1,0 +1,66 @@
+name: CI/CD Deployment
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build-and-test:
+    name: Build & Verify
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-size: 20
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Run ESLint
+        run: npm run lint
+
+      - name: Run Build
+        run: npm run build
+
+  deploy:
+    name: Deploy to Server
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ secrets.DEPLOY_PORT || 22 }}
+          script: |
+            echo "Starting Deployment..."
+            
+            # Navigate to directory (adjust this to your server path)
+            cd /var/www/process-manager || exit 1
+            
+            # Fetch latest changes
+            git pull origin main
+            
+            # Install production dependencies
+            npm install --omit=dev
+            
+            # Build application
+            npm run build
+            
+            # Reload application in PM2 (zero-downtime)
+            # Assumes you have already started the app once with:
+            # pm2 start npm --name "process-manager" -- start
+            pm2 reload process-manager || pm2 start npm --name "process-manager" -- start
+            
+            echo "Deployment completed successfully!"

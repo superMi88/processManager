@@ -1,0 +1,325 @@
+.container {
+  max-width: 1400px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 2rem 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+  animation: fadeIn 0.4s ease-out;
+}
+
+/* Header styling */
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 1.5rem;
+  padding-bottom: 1.5rem;
+  border-bottom: 1px solid var(--border-glass);
+}
+
+.headerLeft {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.title {
+  font-size: 2.25rem;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+}
+
+.headerRight {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.userInfo {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.03);
+  padding: 0.5rem 0.85rem;
+  border-radius: 50px;
+  border: 1px solid var(--border-glass);
+}
+
+.logoutBtn {
+  font-size: 0.85rem;
+}
+
+/* Grid for system resources stats */
+.statsGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 1.5rem;
+}
+
+.statCard {
+  padding: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  position: relative;
+  overflow: hidden;
+}
+
+.statHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+
+.statValue {
+  font-size: 2rem;
+  font-weight: 700;
+  font-family: var(--font-heading);
+}
+
+.statDetails {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+/* Visual bar for CPU and Memory */
+.statBarBg {
+  background: rgba(255, 255, 255, 0.05);
+  height: 6px;
+  border-radius: 3px;
+  width: 100%;
+  overflow: hidden;
+}
+
+.statBarFill {
+  height: 100%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, var(--primary), var(--secondary));
+  transition: width 0.5s ease-out;
+}
+
+/* Process section */
+.sectionHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+
+.sectionTitle {
+  font-size: 1.5rem;
+  font-weight: 700;
+}
+
+.refreshBtn {
+  font-size: 0.85rem;
+}
+
+.tableWrapper {
+  overflow-x: auto;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-glass);
+  background: var(--bg-surface);
+}
+
+.processTable {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  text-align: left;
+}
+
+.processTable th {
+  padding: 1rem 1.5rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border-glass);
+  background: rgba(0, 0, 0, 0.15);
+}
+
+.processTable td {
+  padding: 1.25rem 1.5rem;
+  font-size: 0.9rem;
+  color: var(--text-primary);
+  border-bottom: 1px solid var(--border-glass);
+  vertical-align: middle;
+}
+
+.processTable tr:last-child td {
+  border-bottom: none;
+}
+
+.processTable tr:hover td {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.processName {
+  font-weight: 600;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.pmId {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.05);
+  padding: 0.15rem 0.35rem;
+  border-radius: var(--radius-sm);
+}
+
+.monoText {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+}
+
+.actionsCell {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.actionBtn {
+  padding: 0.5rem;
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-glass);
+  background: rgba(255, 255, 255, 0.03);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: var(--transition-fast);
+}
+
+.actionBtn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  border-color: var(--border-glass-hover);
+}
+
+.actionBtnStart:hover {
+  color: var(--success);
+  border-color: rgba(16, 185, 129, 0.3);
+  background: var(--success-glow);
+}
+
+.actionBtnStop:hover {
+  color: var(--danger);
+  border-color: rgba(239, 68, 68, 0.3);
+  background: var(--danger-glow);
+}
+
+.actionBtnRestart:hover {
+  color: var(--primary);
+  border-color: rgba(59, 130, 246, 0.3);
+  background: var(--primary-glow);
+}
+
+/* Logs panel */
+.logsSection {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.logsPanel {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  background: #07090e;
+  box-shadow: var(--shadow-neon);
+}
+
+.logsHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem 1.5rem;
+  background: #0a0e17;
+  border-bottom: 1px solid var(--border-glass);
+}
+
+.logsTitle {
+  font-size: 1rem;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.logsHeaderRight {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.logsConsole {
+  background: #07090e;
+  padding: 1.5rem;
+  min-height: 250px;
+  max-height: 450px;
+  overflow-y: auto;
+  font-family: var(--font-mono);
+  font-size: 0.825rem;
+  color: #e2e8f0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.logLine {
+  white-space: pre-wrap;
+  word-break: break-all;
+  line-height: 1.6;
+}
+
+.logLineStdout {
+  color: #a7f3d0;
+}
+
+.logLineStderr {
+  color: #fca5a5;
+}
+
+.logLineSystem {
+  color: #93c5fd;
+  font-style: italic;
+}
+
+.emptyState {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 4rem 2rem;
+  text-align: center;
+  color: var(--text-secondary);
+  gap: 1rem;
+}
+
+.emptyStateIcon {
+  color: var(--text-muted);
+  opacity: 0.5;
+}
+
+/* Animations */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
