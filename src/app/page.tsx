@@ -615,7 +615,7 @@ export default function DashboardPage() {
               </svg>
               <p>Keine Datenbanken automatisch erkannt.</p>
               <p style={{ fontSize: "0.85rem", color: "var(--text-muted)", maxWidth: "450px", margin: "0 auto" }}>
-                Der Scanner sucht in den Umgebungsvariablen aktiver PM2-Prozesse nach Verbindungsparametern (wie <code>DATABASE_URL</code> oder <code>MONGODB_URI</code>).
+                Der Scanner sucht auf dem System nach aktiven Datenbank-Ports (z. B. 5432, 5435, 27017) und liest Konfigurationen aus lokalen <code>.env</code>-Dateien aus.
               </p>
             </div>
           </div>
@@ -626,7 +626,6 @@ export default function DashboardPage() {
                 <tr>
                   <th>Typ</th>
                   <th>Name / Host</th>
-                  <th>PM2-Quelle</th>
                   <th>Benutzer</th>
                   <th>Status</th>
                   <th>Größe</th>
@@ -654,9 +653,6 @@ export default function DashboardPage() {
                       <div className={styles.dbMaskedUri} title={db.maskedUri}>
                         {db.maskedUri}
                       </div>
-                    </td>
-                    <td>
-                      <span className={styles.pmId}>{db.sourceProcess}</span>
                     </td>
                     <td className={styles.monoText}>{db.user}</td>
                     <td>
