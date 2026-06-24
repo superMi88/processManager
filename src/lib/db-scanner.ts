@@ -78,7 +78,7 @@ function maskConnectionString(uri: string): { host: string; database: string; us
     const maskedUri = `${protocol}${authPart}${host}/${database}${parsed.search}`;
     
     return { host, database, user, maskedUri };
-  } catch (e) {
+  } catch {
     console.error("Failed to parse URI:", uri);
     return { host: "unknown", database: "unknown", user: "unknown", maskedUri: "invalid-uri" };
   }
@@ -116,7 +116,7 @@ function discoverUrisFromEnvFiles(): { uri: string; source: string }[] {
               parseEnvContent(content, dir).forEach(uri => discovered.push(uri));
             }
           }
-        } catch (e) {
+        } catch {
           // Ignore files or directories that raise stat errors
         }
       }
@@ -161,7 +161,12 @@ async function getPostgresStats(connectionString: string): Promise<Partial<Datab
     const currDbRes = await client.query("SELECT current_database() as db");
     const currentDb = currDbRes.rows[0]?.db || "postgres";
     
-    let rows: any[] = [];
+    interface PostgresDbRow {
+      name: string;
+      size_bytes: string | number;
+      connection_count: string | number;
+    }
+    let rows: PostgresDbRow[] = [];
     try {
       // Fetch size and connections for all non-system databases in this cluster
       const dbsRes = await client.query(`
@@ -173,7 +178,7 @@ async function getPostgresStats(connectionString: string): Promise<Partial<Datab
         WHERE d.datistemplate = false AND d.datname NOT IN ('postgres', 'template1', 'template2')
       `);
       rows = dbsRes.rows;
-    } catch (e) {
+    } catch {
       // Fallback: If permissions prevent reading pg_database, query the connected database
       const sizeRes = await client.query("SELECT pg_database_size(current_database()) as size_bytes");
       const sizeBytes = parseInt(sizeRes.rows[0]?.size_bytes || "0", 10);
