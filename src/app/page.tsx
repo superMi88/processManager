@@ -31,6 +31,40 @@ interface DatabaseInfo {
   error?: string;
 }
 
+interface RegisteredDatabase {
+  id: string;
+  alias: string;
+  type: "postgres" | "mongodb";
+  host: string;
+  port: number;
+  user: string;
+  password?: string;
+  database: string;
+  schema?: string;
+}
+
+interface RegisteredCredential {
+  id: string;
+  alias: string;
+  key: string;
+  value: string;
+}
+
+interface ProjectRequirement {
+  key: string;
+  type: "database" | "credential";
+  dbType?: "postgres" | "mongodb";
+  description?: string;
+}
+
+interface DiscoveredProject {
+  name: string;
+  path: string;
+  requirements: ProjectRequirement[];
+  links: Record<string, string>;
+}
+
+
 export default function DashboardPage() {
   const [processes, setProcesses] = useState<ProcessInfo[]>([]);
   const [databases, setDatabases] = useState<DatabaseInfo[]>([]);
@@ -45,7 +79,263 @@ export default function DashboardPage() {
   const router = useRouter();
   const consoleRef = useRef<HTMLDivElement>(null);
 
+  const [activeTab, setActiveTab] = useState<"dashboard" | "resources" | "projects">("dashboard");
+  const [registeredDbs, setRegisteredDbs] = useState<RegisteredDatabase[]>([]);
+  const [registeredCreds, setRegisteredCreds] = useState<RegisteredCredential[]>([]);
+  const [discoveredProjects, setDiscoveredProjects] = useState<DiscoveredProject[]>([]);
+  const [isResourcesLoading, setIsResourcesLoading] = useState(true);
+  const [isProjectsLoading, setIsProjectsLoading] = useState(true);
+  
+  // Database form state
+  const [dbAlias, setDbAlias] = useState("");
+  const [dbType, setDbType] = useState<"postgres" | "mongodb">("postgres");
+  const [dbHost, setDbHost] = useState("localhost");
+  const [dbPort, setDbPort] = useState(5432);
+  const [dbUser, setDbUser] = useState("");
+  const [dbPassword, setDbPassword] = useState("");
+  const [dbDatabase, setDbDatabase] = useState("");
+  const [dbSchema, setDbSchema] = useState("public");
+  const [editingDbId, setEditingDbId] = useState<string | null>(null);
+
+  // Credential form state
+  const [credAlias, setCredAlias] = useState("");
+  const [credKey, setCredKey] = useState("");
+  const [credValue, setCredValue] = useState("");
+  const [editingCredId, setEditingCredId] = useState<string | null>(null);
+  
+  // Project mapping changes state (projectName -> envKey -> resourceId)
+  const [pendingLinks, setPendingLinks] = useState<Record<string, Record<string, string>>>({});
+  const [isSavingProject, setIsSavingProject] = useState<Record<string, boolean>>({});
+
+  const fetchResources = useCallback(async () => {
+    setIsResourcesLoading(true);
+    try {
+      const response = await fetch("/api/manager/resources");
+      if (response.ok) {
+        const data = await response.json();
+        setRegisteredDbs(data.databases || []);
+        setRegisteredCreds(data.credentials || []);
+      }
+    } catch (error) {
+      console.error("Error fetching resources:", error);
+    } finally {
+      setIsResourcesLoading(false);
+    }
+  }, []);
+
+  const fetchProjects = useCallback(async () => {
+    setIsProjectsLoading(true);
+    try {
+      const response = await fetch("/api/manager/projects");
+      if (response.ok) {
+        const data = await response.json();
+        setDiscoveredProjects(data.projects || []);
+        const links: Record<string, Record<string, string>> = {};
+        for (const p of data.projects || []) {
+          links[p.name] = { ...p.links };
+        }
+        setPendingLinks(links);
+      }
+    } catch (error) {
+      console.error("Error fetching projects:", error);
+    } finally {
+      setIsProjectsLoading(false);
+    }
+  }, []);
+
+  // Save database
+  const handleSaveDatabase = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!dbAlias || !dbHost || !dbDatabase) {
+      alert("Bitte fülle alle Pflichtfelder für die Datenbank aus.");
+      return;
+    }
+    
+    const dbData = {
+      id: editingDbId || undefined,
+      alias: dbAlias,
+      type: dbType,
+      host: dbHost,
+      port: Number(dbPort),
+      user: dbUser,
+      password: dbPassword,
+      database: dbDatabase,
+      schema: dbType === "postgres" ? dbSchema : undefined
+    };
+
+    try {
+      const res = await fetch("/api/manager/resources", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "save", type: "database", data: dbData })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setRegisteredDbs(data.databases || []);
+        setDbAlias("");
+        setDbType("postgres");
+        setDbHost("localhost");
+        setDbPort(5432);
+        setDbUser("");
+        setDbPassword("");
+        setDbDatabase("");
+        setDbSchema("public");
+        setEditingDbId(null);
+        alert("Datenbank erfolgreich gespeichert!");
+        fetchProjects();
+      } else {
+        const err = await res.json();
+        alert(`Fehler beim Speichern: ${err.error}`);
+      }
+    } catch (err) {
+      console.error(err);
+      alert("Fehler beim Speichern der Datenbank.");
+    }
+  };
+
+  // Delete database
+  const handleDeleteDatabase = async (id: string) => {
+    if (!confirm("Möchtest du diese Datenbank wirklich löschen? Alle Verknüpfungen werden ebenfalls entfernt.")) {
+      return;
+    }
+    try {
+      const res = await fetch("/api/manager/resources", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "delete", type: "database", data: { id } })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setRegisteredDbs(data.databases || []);
+        fetchProjects();
+      }
+    } catch (err) {
+      console.error(err);
+      alert("Fehler beim Löschen.");
+    }
+  };
+
+  // Save credential
+  const handleSaveCredential = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!credAlias || !credKey || !credValue) {
+      alert("Bitte fülle alle Felder für die Zugangsdaten aus.");
+      return;
+    }
+    
+    const credData = {
+      id: editingCredId || undefined,
+      alias: credAlias,
+      key: credKey,
+      value: credValue
+    };
+
+    try {
+      const res = await fetch("/api/manager/resources", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "save", type: "credential", data: credData })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setRegisteredCreds(data.credentials || []);
+        setCredAlias("");
+        setCredKey("");
+        setCredValue("");
+        setEditingCredId(null);
+        alert("Zugangsdaten erfolgreich gespeichert!");
+        fetchProjects();
+      } else {
+        const err = await res.json();
+        alert(`Fehler beim Speichern: ${err.error}`);
+      }
+    } catch (err) {
+      console.error(err);
+      alert("Fehler beim Speichern der Zugangsdaten.");
+    }
+  };
+
+  // Delete credential
+  const handleDeleteCredential = async (id: string) => {
+    if (!confirm("Möchtest du diese Zugangsdaten wirklich löschen? Alle Verknüpfungen werden ebenfalls entfernt.")) {
+      return;
+    }
+    try {
+      const res = await fetch("/api/manager/resources", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "delete", type: "credential", data: { id } })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setRegisteredCreds(data.credentials || []);
+        fetchProjects();
+      }
+    } catch (err) {
+      console.error(err);
+      alert("Fehler beim Löschen.");
+    }
+  };
+
+  // Edit form helpers
+  const startEditDb = (db: RegisteredDatabase) => {
+    setEditingDbId(db.id);
+    setDbAlias(db.alias);
+    setDbType(db.type);
+    setDbHost(db.host);
+    setDbPort(db.port);
+    setDbUser(db.user);
+    setDbPassword(db.password || "");
+    setDbDatabase(db.database);
+    setDbSchema(db.schema || "public");
+  };
+
+  const startEditCred = (cred: RegisteredCredential) => {
+    setEditingCredId(cred.id);
+    setCredAlias(cred.alias);
+    setCredKey(cred.key);
+    setCredValue(cred.value);
+  };
+
+  // Handle mapping updates in dropdowns
+  const handleLinkChange = (projectName: string, envKey: string, resourceId: string) => {
+    setPendingLinks(prev => ({
+      ...prev,
+      [projectName]: {
+        ...(prev[projectName] || {}),
+        [envKey]: resourceId
+      }
+    }));
+  };
+
+  // Save and apply mappings
+  const handleApplyProject = async (projectName: string) => {
+    setIsSavingProject(prev => ({ ...prev, [projectName]: true }));
+    try {
+      const links = pendingLinks[projectName] || {};
+      const res = await fetch("/api/manager/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "apply", projectName, links })
+      });
+      
+      const data = await res.json();
+      if (res.ok) {
+        alert(data.message || `Verknüpfungen für ${projectName} erfolgreich angewendet!`);
+        fetchProjects();
+      } else {
+        alert(`Fehler beim Anwenden: ${data.error}`);
+      }
+    } catch (err) {
+      console.error(err);
+      alert("Fehler beim Anwenden der Konfiguration.");
+    } finally {
+      setIsSavingProject(prev => ({ ...prev, [projectName]: false }));
+    }
+  };
+
   // Fetch process list
+
   const fetchProcesses = useCallback(async (showLoading = false) => {
     if (showLoading) setIsLoading(true);
     try {
@@ -161,12 +451,13 @@ export default function DashboardPage() {
     }
   };
 
-  // Setup polling intervals
   useEffect(() => {
     const initializeDashboard = async () => {
       await fetchSession();
       await fetchProcesses(true);
       await fetchDatabases(true);
+      await fetchResources();
+      await fetchProjects();
     };
     initializeDashboard();
 
@@ -182,7 +473,7 @@ export default function DashboardPage() {
       clearInterval(processInterval);
       clearInterval(dbInterval);
     };
-  }, [fetchSession, fetchProcesses, fetchDatabases]);
+  }, [fetchSession, fetchProcesses, fetchDatabases, fetchResources, fetchProjects]);
 
   // Poll logs if a process is selected
   useEffect(() => {
@@ -327,448 +618,870 @@ export default function DashboardPage() {
         </div>
       </header>
 
-      {/* System Resources & DB Stats Grid */}
-      <section className={styles.statsGrid}>
-        {/* PM2 Processes Card */}
-        <div className={`${styles.statCard} glass-panel`}>
-          <div className={styles.statHeader}>
-            <span>Gesamt Prozesse</span>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" strokeWidth="2">
-              <rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect>
-              <rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect>
-              <line x1="6" y1="6" x2="6.01" y2="6"></line>
-              <line x1="6" y1="18" x2="6.01" y2="18"></line>
-            </svg>
-          </div>
-          <div className={styles.statValue}>{totalProcesses}</div>
-          <div className={styles.statDetails}>
-            {runningProcesses} aktiv &bull; {stoppedProcesses} inaktiv
-          </div>
-        </div>
+      {/* Tabs Switcher */}
+      <div className={styles.tabsContainer}>
+        <button 
+          onClick={() => setActiveTab("dashboard")} 
+          className={`${styles.tabButton} ${activeTab === "dashboard" ? styles.tabButtonActive : ""}`}
+        >
+          Dashboard
+        </button>
+        <button 
+          onClick={() => {
+            setActiveTab("resources");
+            fetchResources();
+          }} 
+          className={`${styles.tabButton} ${activeTab === "resources" ? styles.tabButtonActive : ""}`}
+        >
+          Datenbanken & Keys
+        </button>
+        <button 
+          onClick={() => {
+            setActiveTab("projects");
+            fetchProjects();
+            fetchResources();
+          }} 
+          className={`${styles.tabButton} ${activeTab === "projects" ? styles.tabButtonActive : ""}`}
+        >
+          Projekt-Verknüpfungen
+        </button>
+      </div>
 
-        {/* CPU Card */}
-        <div className={`${styles.statCard} glass-panel`}>
-          <div className={styles.statHeader}>
-            <span>CPU-Auslastung (PM2)</span>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" strokeWidth="2">
-              <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
-              <line x1="9" y1="3" x2="9" y2="21"></line>
-              <line x1="15" y1="3" x2="15" y2="21"></line>
-              <line x1="3" y1="9" x2="21" y2="9"></line>
-              <line x1="3" y1="15" x2="21" y2="15"></line>
-            </svg>
-          </div>
-          <div className={styles.statValue}>{totalCpu}%</div>
-          <div className={styles.statBarBg}>
-            <div className={styles.statBarFill} style={{ width: `${Math.min(100, totalCpu)}%` }}></div>
-          </div>
-        </div>
-
-        {/* RAM Card */}
-        <div className={`${styles.statCard} glass-panel`}>
-          <div className={styles.statHeader}>
-            <span>Arbeitsspeicher (PM2)</span>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--secondary)" strokeWidth="2">
-              <path d="M6 2v20M18 2v20M6 6h12M6 10h12M6 14h12M6 18h12"></path>
-            </svg>
-          </div>
-          <div className={styles.statValue}>{formatMemory(totalMemoryBytes)}</div>
-          <div className={styles.statDetails}>RAM aller aktiven PM2-Prozesse</div>
-        </div>
-
-        {/* Databases Count Card */}
-        <div className={`${styles.statCard} glass-panel`}>
-          <div className={styles.statHeader}>
-            <span>Erkannte Datenbanken</span>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" strokeWidth="2">
-              <path d="M12 22c5.523 0 10-2.239 10-5s-4.477-5-10-5S2 14.239 2 17s4.477 5 10 5z"></path>
-              <path d="M22 17v-5c0-2.761-4.477-5-10-5S2 9.239 2 12v5"></path>
-              <path d="M22 12V7c0-2.761-4.477-5-10-5S2 4.239 2 7v5"></path>
-            </svg>
-          </div>
-          <div className={styles.statValue}>{totalDatabases}</div>
-          <div className={styles.statDetails}>
-            {onlineDatabases} Online &bull; {offlineDatabases} Offline
-          </div>
-        </div>
-
-        {/* Database Storage Card */}
-        <div className={`${styles.statCard} glass-panel`}>
-          <div className={styles.statHeader}>
-            <span>Gesamte Datengröße</span>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--secondary)" strokeWidth="2">
-              <ellipse cx="12" cy="5" rx="9" ry="3"></ellipse>
-              <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path>
-              <path d="M3 12c0 1.66 4 3 9 3s9-1.34 9-3"></path>
-            </svg>
-          </div>
-          <div className={styles.statValue}>{formatMemory(totalDbsSizeBytes)}</div>
-          <div className={styles.statDetails}>Speicherplatz aller aktiven DBs</div>
-        </div>
-      </section>
-
-      {/* Main Content: Processes Table */}
-      <section>
-        <div className={styles.sectionHeader}>
-          <h2 className={styles.sectionTitle}>PM2 Prozesse</h2>
-        </div>
-
-        {isLoading ? (
-          <div className="glass-panel" style={{ padding: "4rem", textAlign: "center" }}>
-            <svg
-              className="spinner"
-              width="36"
-              height="36"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="var(--primary)"
-              strokeWidth="2.5"
-            >
-              <circle cx="12" cy="12" r="10" strokeDasharray="40 20"></circle>
-            </svg>
-            <p style={{ marginTop: "1rem", color: "var(--text-secondary)" }}>Prozessliste wird geladen...</p>
-          </div>
-        ) : processes.length === 0 ? (
-          <div className={`${styles.tableWrapper} glass-panel`}>
-            <div className={styles.emptyState}>
-              <svg
-                className={styles.emptyStateIcon}
-                width="48"
-                height="48"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.5"
-              >
-                <circle cx="12" cy="12" r="10"></circle>
-                <line x1="8" y1="12" x2="16" y2="12"></line>
-              </svg>
-              <p>Keine PM2-Prozesse gefunden.</p>
-              <p style={{ fontSize: "0.85rem", color: "var(--text-muted)" }}>
-                Stelle sicher, dass PM2 auf dem Server läuft und Prozesse registriert sind.
-              </p>
-            </div>
-          </div>
-        ) : (
-          <div className={styles.tableWrapper}>
-            <table className={styles.processTable}>
-              <thead>
-                <tr>
-                  <th>Name</th>
-                  <th>Status</th>
-                  <th>CPU</th>
-                  <th>RAM</th>
-                  <th>Restarts</th>
-                  <th>Uptime</th>
-                  <th>Aktionen</th>
-                </tr>
-              </thead>
-              <tbody>
-                {processes.map((proc) => {
-                  const isStarting = actionInProgress[`${proc.name}-start`];
-                  const isStopping = actionInProgress[`${proc.name}-stop`];
-                  const isRestarting = actionInProgress[`${proc.name}-restart`];
-                  const isAnyAction = isStarting || isStopping || isRestarting;
-
-                  return (
-                    <tr 
-                      key={proc.id + "-" + proc.name}
-                      style={{
-                        background: selectedProcess?.name === proc.name ? "rgba(59, 130, 246, 0.05)" : undefined,
-                      }}
-                    >
-                      <td>
-                        <div className={styles.processName}>
-                          <span>{proc.name}</span>
-                          <span className={styles.pmId}>ID: {proc.id}</span>
-                          {proc.pid > 0 && <span className={styles.pmId}>PID: {proc.pid}</span>}
-                        </div>
-                      </td>
-                      <td>{getStatusBadge(proc.status)}</td>
-                      <td className={styles.monoText}>{proc.status === "online" ? `${proc.cpu}%` : "—"}</td>
-                      <td className={styles.monoText}>{proc.status === "online" ? formatMemory(proc.memory) : "—"}</td>
-                      <td className={styles.monoText}>{proc.restarts}</td>
-                      <td className={styles.monoText}>{formatUptime(proc.uptime)}</td>
-                      <td>
-                        <div className={styles.actionsCell}>
-                          {proc.status === "online" ? (
-                            <button
-                              onClick={() => handleProcessAction(proc.name, "stop")}
-                              disabled={isAnyAction}
-                              className={`${styles.actionBtn} ${styles.actionBtnStop}`}
-                              title="Stoppen"
-                            >
-                              {isStopping ? (
-                                <svg className="spinner" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10" strokeDasharray="30 15"></circle></svg>
-                              ) : (
-                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect></svg>
-                              )}
-                            </button>
-                          ) : (
-                            <button
-                              onClick={() => handleProcessAction(proc.name, "start")}
-                              disabled={isAnyAction}
-                              className={`${styles.actionBtn} ${styles.actionBtnStart}`}
-                              title="Starten"
-                            >
-                              {isStarting ? (
-                                <svg className="spinner" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10" strokeDasharray="30 15"></circle></svg>
-                              ) : (
-                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
-                              )}
-                            </button>
-                          )}
-
-                          <button
-                            onClick={() => handleProcessAction(proc.name, "restart")}
-                            disabled={isAnyAction}
-                            className={`${styles.actionBtn} ${styles.actionBtnRestart}`}
-                            title="Neustarten"
-                          >
-                            {isRestarting ? (
-                              <svg className="spinner" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10" strokeDasharray="30 15"></circle></svg>
-                            ) : (
-                              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"></path></svg>
-                            )}
-                          </button>
-
-                          <button
-                            onClick={() => {
-                              if (selectedProcess?.name === proc.name) {
-                                setSelectedProcess(null);
-                                setLogs([]);
-                              } else {
-                                setSelectedProcess(proc);
-                              }
-                            }}
-                            className={styles.actionBtn}
-                            style={{
-                              background: selectedProcess?.name === proc.name ? "rgba(59, 130, 246, 0.2)" : undefined,
-                              borderColor: selectedProcess?.name === proc.name ? "var(--primary)" : undefined,
-                              color: selectedProcess?.name === proc.name ? "#fff" : undefined,
-                            }}
-                            title="Logs anzeigen"
-                          >
-                            <svg
-                              width="16"
-                              height="16"
-                              viewBox="0 0 24 24"
-                              fill="none"
-                              stroke="currentColor"
-                              strokeWidth="2"
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                            >
-                              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-                              <polyline points="14 2 14 8 20 8"></polyline>
-                              <line x1="16" y1="13" x2="8" y2="13"></line>
-                              <line x1="16" y1="17" x2="8" y2="17"></line>
-                              <polyline points="10 9 9 9 8 9"></polyline>
-                            </svg>
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
-
-      {/* Databases Discovery view */}
-      <section style={{ marginTop: "1rem" }}>
-        <div className={styles.sectionHeader}>
-          <h2 className={styles.sectionTitle}>Datenbanken (Auto-Discovery)</h2>
-        </div>
-
-        {isDbsLoading ? (
-          <div className="glass-panel" style={{ padding: "4rem", textAlign: "center" }}>
-            <svg
-              className="spinner"
-              width="36"
-              height="36"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="var(--primary)"
-              strokeWidth="2.5"
-            >
-              <circle cx="12" cy="12" r="10" strokeDasharray="40 20"></circle>
-            </svg>
-            <p style={{ marginTop: "1rem", color: "var(--text-secondary)" }}>Datenbanken werden gescannt...</p>
-          </div>
-        ) : databases.length === 0 ? (
-          <div className={`${styles.tableWrapper} glass-panel`}>
-            <div className={styles.emptyState}>
-              <svg
-                className={styles.emptyStateIcon}
-                width="48"
-                height="48"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.5"
-              >
-                <circle cx="12" cy="12" r="10"></circle>
-                <line x1="8" y1="12" x2="16" y2="12"></line>
-              </svg>
-              <p>Keine Datenbanken automatisch erkannt.</p>
-              <p style={{ fontSize: "0.85rem", color: "var(--text-muted)", maxWidth: "450px", margin: "0 auto" }}>
-                Der Scanner sucht auf dem System nach aktiven Datenbank-Ports (z. B. 5432, 5435, 27017) und liest Konfigurationen aus lokalen <code>.env</code>-Dateien aus.
-              </p>
-            </div>
-          </div>
-        ) : (
-          <div className={styles.tableWrapper}>
-            <table className={styles.processTable}>
-              <thead>
-                <tr>
-                  <th>Typ</th>
-                  <th>Name / Host</th>
-                  <th>Benutzer</th>
-                  <th>Status</th>
-                  <th>Größe</th>
-                  <th>Statistiken / Details</th>
-                </tr>
-              </thead>
-              <tbody>
-                {databases.map((db, idx) => (
-                  <tr key={idx}>
-                    <td>
-                      <div
-                        className={`${styles.dbTypeIcon} ${
-                          db.type === "postgres" ? styles.dbTypePostgres : styles.dbTypeMongodb
-                        }`}
-                        title={db.type}
-                      >
-                        {db.type === "postgres" ? "PG" : "MG"}
-                      </div>
-                    </td>
-                    <td>
-                      <div className={styles.processName}>
-                        <span>{db.name}</span>
-                        <span className={styles.pmId}>{db.host}</span>
-                      </div>
-                      <div className={styles.dbMaskedUri} title={db.maskedUri}>
-                        {db.maskedUri}
-                      </div>
-                    </td>
-                    <td className={styles.monoText}>{db.user}</td>
-                    <td>
-                      {db.status === "online" ? (
-                        <span className="badge badge-online">
-                          <span className="pulse-dot pulse-dot-online"></span>Online
-                        </span>
-                      ) : (
-                        <span className="badge badge-stopped" title={db.error}>
-                          <span className="pulse-dot pulse-dot-stopped"></span>Offline
-                        </span>
-                      )}
-                    </td>
-                    <td className={styles.monoText}>
-                      {db.status === "online" ? formatMemory(db.sizeBytes) : "—"}
-                    </td>
-                    <td>
-                      {db.status === "online" ? (
-                        <div style={{ fontSize: "0.85rem", color: "var(--text-secondary)" }}>
-                          {db.type === "postgres" && (
-                            <>
-                              <div>Tabellen: <strong>{db.tablesCount ?? 0}</strong></div>
-                              <div>Verbindungen: <strong>{db.connectionCount ?? 0}</strong></div>
-                            </>
-                          )}
-                          {db.type === "mongodb" && (
-                            <>
-                              <div>Collections: <strong>{db.collectionsCount ?? 0}</strong></div>
-                              <div>Dokumente: <strong>{db.documentsCount?.toLocaleString() ?? 0}</strong></div>
-                            </>
-                          )}
-                        </div>
-                      ) : (
-                        <span 
-                          style={{ 
-                            fontSize: "0.75rem", 
-                            color: "var(--danger)", 
-                            maxWidth: "200px", 
-                            display: "inline-block", 
-                            wordBreak: "break-word" 
-                          }} 
-                          title={db.error}
-                        >
-                          {db.error || "Verbindungsfehler"}
-                        </span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
-
-      {/* Logs View Panel */}
-      {selectedProcess && (
-        <section className={styles.logsSection}>
-          <div className={styles.logsPanel}>
-            <div className={styles.logsHeader}>
-              <div className={styles.logsTitle}>
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="4 17 10 11 4 5"></polyline>
-                  <line x1="12" y1="19" x2="20" y2="19"></line>
+      {activeTab === "dashboard" && (
+        <>
+          {/* System Resources & DB Stats Grid */}
+          <section className={styles.statsGrid}>
+            {/* PM2 Processes Card */}
+            <div className={`${styles.statCard} glass-panel`}>
+              <div className={styles.statHeader}>
+                <span>Gesamt Prozesse</span>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" strokeWidth="2">
+                  <rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect>
+                  <rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect>
+                  <line x1="6" y1="6" x2="6.01" y2="6"></line>
+                  <line x1="6" y1="18" x2="6.01" y2="18"></line>
                 </svg>
-                <span>Logs: <strong>{selectedProcess.name}</strong></span>
               </div>
-              <div className={styles.logsHeaderRight}>
-                {isLogsLoading && (
-                  <svg className="spinner" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--text-secondary)" strokeWidth="2">
-                    <circle cx="12" cy="12" r="10" strokeDasharray="30 15"></circle>
-                  </svg>
-                )}
-                <span style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>Live-Aktualisierung (3s)</span>
-                <button
-                  onClick={() => {
-                    setSelectedProcess(null);
-                    setLogs([]);
-                  }}
-                  className="btn btn-secondary btn-icon"
-                  style={{ width: "28px", height: "28px", borderRadius: "6px" }}
-                  title="Schließen"
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                    <line x1="18" y1="6" x2="6" y2="18"></line>
-                    <line x1="6" y1="6" x2="18" y2="18"></line>
-                  </svg>
-                </button>
+              <div className={styles.statValue}>{totalProcesses}</div>
+              <div className={styles.statDetails}>
+                {runningProcesses} aktiv &bull; {stoppedProcesses} inaktiv
               </div>
             </div>
-            
-            <div ref={consoleRef} className={styles.logsConsole}>
-              {logs.length === 0 ? (
-                <div className={styles.logLine + " " + styles.logLineSystem}>
-                  Warte auf Log-Daten...
+
+            {/* CPU Card */}
+            <div className={`${styles.statCard} glass-panel`}>
+              <div className={styles.statHeader}>
+                <span>CPU-Auslastung (PM2)</span>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" strokeWidth="2">
+                  <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                  <line x1="9" y1="3" x2="9" y2="21"></line>
+                  <line x1="15" y1="3" x2="15" y2="21"></line>
+                  <line x1="3" y1="9" x2="21" y2="9"></line>
+                  <line x1="3" y1="15" x2="21" y2="15"></line>
+                </svg>
+              </div>
+              <div className={styles.statValue}>{totalCpu}%</div>
+              <div className={styles.statBarBg}>
+                <div className={styles.statBarFill} style={{ width: `${Math.min(100, totalCpu)}%` }}></div>
+              </div>
+            </div>
+
+            {/* RAM Card */}
+            <div className={`${styles.statCard} glass-panel`}>
+              <div className={styles.statHeader}>
+                <span>Arbeitsspeicher (PM2)</span>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--secondary)" strokeWidth="2">
+                  <path d="M6 2v20M18 2v20M6 6h12M6 10h12M6 14h12M6 18h12"></path>
+                </svg>
+              </div>
+              <div className={styles.statValue}>{formatMemory(totalMemoryBytes)}</div>
+              <div className={styles.statDetails}>RAM aller aktiven PM2-Prozesse</div>
+            </div>
+
+            {/* Databases Count Card */}
+            <div className={`${styles.statCard} glass-panel`}>
+              <div className={styles.statHeader}>
+                <span>Erkannte Datenbanken</span>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" strokeWidth="2">
+                  <path d="M12 22c5.523 0 10-2.239 10-5s-4.477-5-10-5S2 14.239 2 17s4.477 5 10 5z"></path>
+                  <path d="M22 17v-5c0-2.761-4.477-5-10-5S2 9.239 2 12v5"></path>
+                  <path d="M22 12V7c0-2.761-4.477-5-10-5S2 4.239 2 7v5"></path>
+                </svg>
+              </div>
+              <div className={styles.statValue}>{totalDatabases}</div>
+              <div className={styles.statDetails}>
+                {onlineDatabases} Online &bull; {offlineDatabases} Offline
+              </div>
+            </div>
+
+            {/* Database Storage Card */}
+            <div className={`${styles.statCard} glass-panel`}>
+              <div className={styles.statHeader}>
+                <span>Gesamte Datengröße</span>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--secondary)" strokeWidth="2">
+                  <ellipse cx="12" cy="5" rx="9" ry="3"></ellipse>
+                  <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path>
+                  <path d="M3 12c0 1.66 4 3 9 3s9-1.34 9-3"></path>
+                </svg>
+              </div>
+              <div className={styles.statValue}>{formatMemory(totalDbsSizeBytes)}</div>
+              <div className={styles.statDetails}>Speicherplatz aller aktiven DBs</div>
+            </div>
+          </section>
+
+          {/* Main Content: Processes Table */}
+          <section>
+            <div className={styles.sectionHeader}>
+              <h2 className={styles.sectionTitle}>PM2 Prozesse</h2>
+            </div>
+
+            {isLoading ? (
+              <div className="glass-panel" style={{ padding: "4rem", textAlign: "center" }}>
+                <svg
+                  className="spinner"
+                  width="36"
+                  height="36"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="var(--primary)"
+                  strokeWidth="2.5"
+                >
+                  <circle cx="12" cy="12" r="10" strokeDasharray="40 20"></circle>
+                </svg>
+                <p style={{ marginTop: "1rem", color: "var(--text-secondary)" }}>Prozessliste wird geladen...</p>
+              </div>
+            ) : processes.length === 0 ? (
+              <div className={`${styles.tableWrapper} glass-panel`}>
+                <div className={styles.emptyState}>
+                  <svg
+                    className={styles.emptyStateIcon}
+                    width="48"
+                    height="48"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                  >
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <line x1="8" y1="12" x2="16" y2="12"></line>
+                  </svg>
+                  <p>Keine PM2-Prozesse gefunden.</p>
+                  <p style={{ fontSize: "0.85rem", color: "var(--text-muted)" }}>
+                    Stelle sicher, dass PM2 auf dem Server läuft und Prozesse registriert sind.
+                  </p>
                 </div>
-              ) : (
-                logs.map((line, idx) => {
-                  let lineClass = styles.logLine;
-                  if (line.startsWith("[STDOUT]")) {
-                    lineClass += ` ${styles.logLineStdout}`;
-                  } else if (line.startsWith("[STDERR]")) {
-                    lineClass += ` ${styles.logLineStderr}`;
-                  } else if (line.startsWith("[SYSTEM]")) {
-                    lineClass += ` ${styles.logLineSystem}`;
-                  }
-                  return (
-                    <div key={idx} className={lineClass}>
-                      {line}
+              </div>
+            ) : (
+              <div className={styles.tableWrapper}>
+                <table className={styles.processTable}>
+                  <thead>
+                    <tr>
+                      <th>Name</th>
+                      <th>Status</th>
+                      <th>CPU</th>
+                      <th>RAM</th>
+                      <th>Restarts</th>
+                      <th>Uptime</th>
+                      <th>Aktionen</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {processes.map((proc) => {
+                      const isStarting = actionInProgress[`${proc.name}-start`];
+                      const isStopping = actionInProgress[`${proc.name}-stop`];
+                      const isRestarting = actionInProgress[`${proc.name}-restart`];
+                      const isAnyAction = isStarting || isStopping || isRestarting;
+
+                      return (
+                        <tr 
+                          key={proc.id + "-" + proc.name}
+                          style={{
+                            background: selectedProcess?.name === proc.name ? "rgba(59, 130, 246, 0.05)" : undefined,
+                          }}
+                        >
+                          <td>
+                            <div className={styles.processName}>
+                              <span>{proc.name}</span>
+                              <span className={styles.pmId}>ID: {proc.id}</span>
+                              {proc.pid > 0 && <span className={styles.pmId}>PID: {proc.pid}</span>}
+                            </div>
+                          </td>
+                          <td>{getStatusBadge(proc.status)}</td>
+                          <td className={styles.monoText}>{proc.status === "online" ? `${proc.cpu}%` : "—"}</td>
+                          <td className={styles.monoText}>{proc.status === "online" ? formatMemory(proc.memory) : "—"}</td>
+                          <td className={styles.monoText}>{proc.restarts}</td>
+                          <td className={styles.monoText}>{formatUptime(proc.uptime)}</td>
+                          <td>
+                            <div className={styles.actionsCell}>
+                              {proc.status === "online" ? (
+                                <button
+                                  onClick={() => handleProcessAction(proc.name, "stop")}
+                                  disabled={isAnyAction}
+                                  className={`${styles.actionBtn} ${styles.actionBtnStop}`}
+                                  title="Stoppen"
+                                >
+                                  {isStopping ? (
+                                    <svg className="spinner" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10" strokeDasharray="30 15"></circle></svg>
+                                  ) : (
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect></svg>
+                                  )}
+                                </button>
+                              ) : (
+                                <button
+                                  onClick={() => handleProcessAction(proc.name, "start")}
+                                  disabled={isAnyAction}
+                                  className={`${styles.actionBtn} ${styles.actionBtnStart}`}
+                                  title="Starten"
+                                >
+                                  {isStarting ? (
+                                    <svg className="spinner" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10" strokeDasharray="30 15"></circle></svg>
+                                  ) : (
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                                  )}
+                                </button>
+                              )}
+
+                              <button
+                                onClick={() => handleProcessAction(proc.name, "restart")}
+                                disabled={isAnyAction}
+                                className={`${styles.actionBtn} ${styles.actionBtnRestart}`}
+                                title="Neustarten"
+                              >
+                                {isRestarting ? (
+                                  <svg className="spinner" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10" strokeDasharray="30 15"></circle></svg>
+                                ) : (
+                                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"></path></svg>
+                                )}
+                              </button>
+
+                              <button
+                                onClick={() => {
+                                  if (selectedProcess?.name === proc.name) {
+                                    setSelectedProcess(null);
+                                    setLogs([]);
+                                  } else {
+                                    setSelectedProcess(proc);
+                                  }
+                                }}
+                                className={styles.actionBtn}
+                                style={{
+                                  background: selectedProcess?.name === proc.name ? "rgba(59, 130, 246, 0.2)" : undefined,
+                                  borderColor: selectedProcess?.name === proc.name ? "var(--primary)" : undefined,
+                                  color: selectedProcess?.name === proc.name ? "#fff" : undefined,
+                                }}
+                                title="Logs anzeigen"
+                              >
+                                <svg
+                                  width="16"
+                                  height="16"
+                                  viewBox="0 0 24 24"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  strokeWidth="2"
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                >
+                                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                                  <polyline points="14 2 14 8 20 8"></polyline>
+                                  <line x1="16" y1="13" x2="8" y2="13"></line>
+                                  <line x1="16" y1="17" x2="8" y2="17"></line>
+                                  <polyline points="10 9 9 9 8 9"></polyline>
+                                </svg>
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+
+          {/* Databases Discovery view */}
+          <section style={{ marginTop: "1rem" }}>
+            <div className={styles.sectionHeader}>
+              <h2 className={styles.sectionTitle}>Datenbanken (Auto-Discovery)</h2>
+            </div>
+
+            {isDbsLoading ? (
+              <div className="glass-panel" style={{ padding: "4rem", textAlign: "center" }}>
+                <svg
+                  className="spinner"
+                  width="36"
+                  height="36"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="var(--primary)"
+                  strokeWidth="2.5"
+                >
+                  <circle cx="12" cy="12" r="10" strokeDasharray="40 20"></circle>
+                </svg>
+                <p style={{ marginTop: "1rem", color: "var(--text-secondary)" }}>Datenbanken werden gescannt...</p>
+              </div>
+            ) : databases.length === 0 ? (
+              <div className={`${styles.tableWrapper} glass-panel`}>
+                <div className={styles.emptyState}>
+                  <svg
+                    className={styles.emptyStateIcon}
+                    width="48"
+                    height="48"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                  >
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <line x1="8" y1="12" x2="16" y2="12"></line>
+                  </svg>
+                  <p>Keine Datenbanken automatisch erkannt.</p>
+                  <p style={{ fontSize: "0.85rem", color: "var(--text-muted)", maxWidth: "450px", margin: "0 auto" }}>
+                    Der Scanner sucht auf dem System nach aktiven Datenbank-Ports (z. B. 5432, 5435, 27017) und liest Konfigurationen aus lokalen <code>.env</code>-Dateien aus.
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <div className={styles.tableWrapper}>
+                <table className={styles.processTable}>
+                  <thead>
+                    <tr>
+                      <th>Typ</th>
+                      <th>Name / Host</th>
+                      <th>Benutzer</th>
+                      <th>Status</th>
+                      <th>Größe</th>
+                      <th>Statistiken / Details</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {databases.map((db, idx) => (
+                      <tr key={idx}>
+                        <td>
+                          <div
+                            className={`${styles.dbTypeIcon} ${
+                              db.type === "postgres" ? styles.dbTypePostgres : styles.dbTypeMongodb
+                            }`}
+                            title={db.type}
+                          >
+                            {db.type === "postgres" ? "PG" : "MG"}
+                          </div>
+                        </td>
+                        <td>
+                          <div className={styles.processName}>
+                            <span>{db.name}</span>
+                            <span className={styles.pmId}>{db.host}</span>
+                          </div>
+                          <div className={styles.dbMaskedUri} title={db.maskedUri}>
+                            {db.maskedUri}
+                          </div>
+                        </td>
+                        <td className={styles.monoText}>{db.user}</td>
+                        <td>
+                          {db.status === "online" ? (
+                            <span className="badge badge-online">
+                              <span className="pulse-dot pulse-dot-online"></span>Online
+                            </span>
+                          ) : (
+                            <span className="badge badge-stopped" title={db.error}>
+                              <span className="pulse-dot pulse-dot-stopped"></span>Offline
+                            </span>
+                          )}
+                        </td>
+                        <td className={styles.monoText}>
+                          {db.status === "online" ? formatMemory(db.sizeBytes) : "—"}
+                        </td>
+                        <td>
+                          {db.status === "online" ? (
+                            <div style={{ fontSize: "0.85rem", color: "var(--text-secondary)" }}>
+                              {db.type === "postgres" && (
+                                <>
+                                  <div>Tabellen: <strong>{db.tablesCount ?? 0}</strong></div>
+                                  <div>Verbindungen: <strong>{db.connectionCount ?? 0}</strong></div>
+                                </>
+                              )}
+                              {db.type === "mongodb" && (
+                                <>
+                                  <div>Collections: <strong>{db.collectionsCount ?? 0}</strong></div>
+                                  <div>Dokumente: <strong>{db.documentsCount?.toLocaleString() ?? 0}</strong></div>
+                                </>
+                              )}
+                            </div>
+                          ) : (
+                            <span 
+                              style={{ 
+                                fontSize: "0.75rem", 
+                                color: "var(--danger)", 
+                                maxWidth: "200px", 
+                                display: "inline-block", 
+                                wordBreak: "break-word" 
+                              }} 
+                              title={db.error}
+                            >
+                              {db.error || "Verbindungsfehler"}
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+
+          {/* Logs View Panel */}
+          {selectedProcess && (
+            <section className={styles.logsSection}>
+              <div className={styles.logsPanel}>
+                <div className={styles.logsHeader}>
+                  <div className={styles.logsTitle}>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="4 17 10 11 4 5"></polyline>
+                      <line x1="12" y1="19" x2="20" y2="19"></line>
+                    </svg>
+                    <span>Logs: <strong>{selectedProcess.name}</strong></span>
+                  </div>
+                  <div className={styles.logsHeaderRight}>
+                    {isLogsLoading && (
+                      <svg className="spinner" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--text-secondary)" strokeWidth="2">
+                        <circle cx="12" cy="12" r="10" strokeDasharray="30 15"></circle>
+                      </svg>
+                    )}
+                    <span style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>Live-Aktualisierung (3s)</span>
+                    <button
+                      onClick={() => {
+                        setSelectedProcess(null);
+                        setLogs([]);
+                      }}
+                      className="btn btn-secondary btn-icon"
+                      style={{ width: "28px", height: "28px", borderRadius: "6px" }}
+                      title="Schließen"
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+                
+                <div ref={consoleRef} className={styles.logsConsole}>
+                  {logs.length === 0 ? (
+                    <div className={styles.logLine + " " + styles.logLineSystem}>
+                      Warte auf Log-Daten...
                     </div>
-                  );
-                })
+                  ) : (
+                    logs.map((line, idx) => {
+                      let lineClass = styles.logLine;
+                      if (line.startsWith("[STDOUT]")) {
+                        lineClass += ` ${styles.logLineStdout}`;
+                      } else if (line.startsWith("[STDERR]")) {
+                        lineClass += ` ${styles.logLineStderr}`;
+                      } else if (line.startsWith("[SYSTEM]")) {
+                        lineClass += ` ${styles.logLineSystem}`;
+                      }
+                      return (
+                        <div key={idx} className={lineClass}>
+                          {line}
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+            </section>
+          )}
+        </>
+      )}
+
+      {/* Tab: Datenbanken & Keys Manager */}
+      {activeTab === "resources" && (
+        <div className="layout-main" style={{ animation: "fadeIn 0.3s ease-out" }}>
+          <h2 className={styles.sectionTitle} style={{ marginBottom: "1rem" }}>Zentrale Datenbanken</h2>
+          <div className={styles.settingsGrid} style={{ marginBottom: "3rem" }}>
+            {/* Database Form Card */}
+            <div className={`${styles.settingsCard} glass-panel`}>
+              <h3 style={{ fontSize: "1.2rem", fontWeight: 700 }}>
+                {editingDbId ? "Datenbank bearbeiten" : "Datenbank registrieren"}
+              </h3>
+              <form onSubmit={handleSaveDatabase} style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+                <div className="input-group">
+                  <label className="input-label">Aliasname *</label>
+                  <input 
+                    type="text" 
+                    value={dbAlias} 
+                    onChange={e => setDbAlias(e.target.value)} 
+                    placeholder="z. B. kiSystem Hauptdatenbank" 
+                    className="input-field" 
+                    required 
+                  />
+                </div>
+                
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
+                  <div className="input-group">
+                    <label className="input-label">Typ *</label>
+                    <select 
+                      value={dbType} 
+                      onChange={e => {
+                        setDbType(e.target.value as "postgres" | "mongodb");
+                        setDbPort(e.target.value === "postgres" ? 5432 : 27017);
+                      }} 
+                      className={styles.selectField}
+                    >
+                      <option value="postgres">PostgreSQL</option>
+                      <option value="mongodb">MongoDB</option>
+                    </select>
+                  </div>
+                  <div className="input-group">
+                    <label className="input-label">Host *</label>
+                    <input 
+                      type="text" 
+                      value={dbHost} 
+                      onChange={e => setDbHost(e.target.value)} 
+                      className="input-field" 
+                      required 
+                    />
+                  </div>
+                </div>
+
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
+                  <div className="input-group">
+                    <label className="input-label">Port *</label>
+                    <input 
+                      type="number" 
+                      value={dbPort} 
+                      onChange={e => setDbPort(Number(e.target.value))} 
+                      className="input-field" 
+                      required 
+                    />
+                  </div>
+                  <div className="input-group">
+                    <label className="input-label">Datenbankname *</label>
+                    <input 
+                      type="text" 
+                      value={dbDatabase} 
+                      onChange={e => setDbDatabase(e.target.value)} 
+                      placeholder="z. B. dbname" 
+                      className="input-field" 
+                      required 
+                    />
+                  </div>
+                </div>
+
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
+                  <div className="input-group">
+                    <label className="input-label">Benutzername</label>
+                    <input 
+                      type="text" 
+                      value={dbUser} 
+                      onChange={e => setDbUser(e.target.value)} 
+                      placeholder="z. B. postgres" 
+                      className="input-field" 
+                    />
+                  </div>
+                  <div className="input-group">
+                    <label className="input-label">Passwort</label>
+                    <input 
+                      type="password" 
+                      value={dbPassword} 
+                      onChange={e => setDbPassword(e.target.value)} 
+                      placeholder="••••••••" 
+                      className="input-field" 
+                    />
+                  </div>
+                </div>
+
+                {dbType === "postgres" && (
+                  <div className="input-group">
+                    <label className="input-label">Schema</label>
+                    <input 
+                      type="text" 
+                      value={dbSchema} 
+                      onChange={e => setDbSchema(e.target.value)} 
+                      className="input-field" 
+                    />
+                  </div>
+                )}
+
+                <div className={styles.formActions}>
+                  {editingDbId && (
+                    <button 
+                      type="button" 
+                      onClick={() => {
+                        setEditingDbId(null);
+                        setDbAlias("");
+                        setDbDatabase("");
+                        setDbUser("");
+                        setDbPassword("");
+                        setDbType("postgres");
+                        setDbHost("localhost");
+                        setDbPort(5432);
+                        setDbSchema("public");
+                      }} 
+                      className="btn btn-secondary"
+                    >
+                      Abbrechen
+                    </button>
+                  )}
+                  <button type="submit" className="btn btn-primary">
+                    Speichern
+                  </button>
+                </div>
+              </form>
+            </div>
+
+            {/* Database List Card */}
+            <div className={`${styles.settingsCard} glass-panel`}>
+              <h3 style={{ fontSize: "1.2rem", fontWeight: 700 }}>Registrierte Datenbanken</h3>
+              {isResourcesLoading ? (
+                <div style={{ textAlign: "center", padding: "2rem" }}>
+                  <svg className="spinner" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" strokeWidth="2.5"><circle cx="12" cy="12" r="10" strokeDasharray="30 15"></circle></svg>
+                </div>
+              ) : registeredDbs.length === 0 ? (
+                <p style={{ color: "var(--text-muted)", fontStyle: "italic" }}>Keine Datenbanken registriert.</p>
+              ) : (
+                <div className={styles.resourceList}>
+                  {registeredDbs.map(db => (
+                    <div key={db.id} className={styles.resourceItem}>
+                      <div className={styles.resourceDetails}>
+                        <span className={styles.resourceAlias}>{db.alias}</span>
+                        <span className={styles.resourceSub}>
+                          {db.type.toUpperCase()} &bull; {db.user || "default"}@{db.host}:{db.port}/{db.database}
+                        </span>
+                      </div>
+                      <div style={{ display: "flex", gap: "0.5rem" }}>
+                        <button onClick={() => startEditDb(db)} className="btn btn-secondary btn-icon" style={{ width: "30px", height: "30px" }} title="Bearbeiten">
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 1 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
+                        </button>
+                        <button onClick={() => handleDeleteDatabase(db.id)} className="btn btn-secondary btn-icon" style={{ width: "30px", height: "30px" }} title="Löschen">
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
               )}
             </div>
           </div>
-        </section>
+
+          {/* Credentials Section */}
+          <h2 className={styles.sectionTitle} style={{ marginBottom: "1rem" }}>Zentrale Zugangsdaten (API Keys, etc.)</h2>
+          <div className={styles.settingsGrid}>
+            {/* Credential Form Card */}
+            <div className={`${styles.settingsCard} glass-panel`}>
+              <h3 style={{ fontSize: "1.2rem", fontWeight: 700 }}>
+                {editingCredId ? "Zugangsdaten bearbeiten" : "Zugangsdaten registrieren"}
+              </h3>
+              <form onSubmit={handleSaveCredential} style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+                <div className="input-group">
+                  <label className="input-label">Aliasname *</label>
+                  <input 
+                    type="text" 
+                    value={credAlias} 
+                    onChange={e => setCredAlias(e.target.value)} 
+                    placeholder="z. B. Google Client ID (Live)" 
+                    className="input-field" 
+                    required 
+                  />
+                </div>
+                
+                <div className="input-group">
+                  <label className="input-label">Key *</label>
+                  <input 
+                    type="text" 
+                    value={credKey} 
+                    onChange={e => setCredKey(e.target.value)} 
+                    placeholder="z. B. GOOGLE_CLIENT_ID" 
+                    className="input-field" 
+                    required 
+                  />
+                  <span className={styles.helperText}>Dieser Key wird beim Generieren der .env-Datei verwendet.</span>
+                </div>
+
+                <div className="input-group">
+                  <label className="input-label">Wert *</label>
+                  <input 
+                    type="text" 
+                    value={credValue} 
+                    onChange={e => setCredValue(e.target.value)} 
+                    placeholder="Geheimer Key-Wert" 
+                    className="input-field" 
+                    required 
+                  />
+                </div>
+
+                <div className={styles.formActions}>
+                  {editingCredId && (
+                    <button 
+                      type="button" 
+                      onClick={() => {
+                        setEditingCredId(null);
+                        setCredAlias("");
+                        setCredKey("");
+                        setCredValue("");
+                      }} 
+                      className="btn btn-secondary"
+                    >
+                      Abbrechen
+                    </button>
+                  )}
+                  <button type="submit" className="btn btn-primary">
+                    Speichern
+                  </button>
+                </div>
+              </form>
+            </div>
+
+            {/* Credential List Card */}
+            <div className={`${styles.settingsCard} glass-panel`}>
+              <h3 style={{ fontSize: "1.2rem", fontWeight: 700 }}>Registrierte Zugangsdaten</h3>
+              {isResourcesLoading ? (
+                <div style={{ textAlign: "center", padding: "2rem" }}>
+                  <svg className="spinner" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" strokeWidth="2.5"><circle cx="12" cy="12" r="10" strokeDasharray="30 15"></circle></svg>
+                </div>
+              ) : registeredCreds.length === 0 ? (
+                <p style={{ color: "var(--text-muted)", fontStyle: "italic" }}>Keine Zugangsdaten registriert.</p>
+              ) : (
+                <div className={styles.resourceList}>
+                  {registeredCreds.map(cred => (
+                    <div key={cred.id} className={styles.resourceItem}>
+                      <div className={styles.resourceDetails}>
+                        <span className={styles.resourceAlias}>{cred.alias}</span>
+                        <span className={styles.resourceSub}>
+                          {cred.key} = {cred.value.length > 25 ? cred.value.substring(0, 25) + "..." : cred.value}
+                        </span>
+                      </div>
+                      <div style={{ display: "flex", gap: "0.5rem" }}>
+                        <button onClick={() => startEditCred(cred)} className="btn btn-secondary btn-icon" style={{ width: "30px", height: "30px" }} title="Bearbeiten">
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 1 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
+                        </button>
+                        <button onClick={() => handleDeleteCredential(cred.id)} className="btn btn-secondary btn-icon" style={{ width: "30px", height: "30px" }} title="Löschen">
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Tab: Project Linker */}
+      {activeTab === "projects" && (
+        <div className="layout-main" style={{ animation: "fadeIn 0.3s ease-out" }}>
+          <div className={styles.sectionHeader}>
+            <h2 className={styles.sectionTitle}>Projekt-Verknüpfungen</h2>
+          </div>
+          <p style={{ fontSize: "0.9rem", color: "var(--text-secondary)", marginBottom: "2rem" }}>
+            Projekte mit einer <code>process-manager.json</code> Datei im Hauptverzeichnis werden hier aufgelistet.
+            Ordne deren benötigten Umgebungsvariablen den zentral registrierten Datenbanken oder Zugangsdaten zu.
+          </p>
+
+          {isProjectsLoading ? (
+            <div className="glass-panel" style={{ padding: "4rem", textAlign: "center" }}>
+              <svg className="spinner" width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" strokeWidth="2.5"><circle cx="12" cy="12" r="10" strokeDasharray="40 20"></circle></svg>
+              <p style={{ marginTop: "1rem", color: "var(--text-secondary)" }}>Projekte werden gescannt...</p>
+            </div>
+          ) : discoveredProjects.length === 0 ? (
+            <div className="glass-panel" style={{ padding: "4rem", textAlign: "center" }}>
+              <p style={{ color: "var(--text-secondary)", fontSize: "1.1rem" }}>Keine verwalteten Projekte mit Deklarationsdatei gefunden.</p>
+              <p style={{ fontSize: "0.85rem", color: "var(--text-muted)", maxWidth: "550px", margin: "1rem auto 0 auto" }}>
+                Erstelle im Hauptverzeichnis deiner Nachbarprojekte eine Datei namens <code>process-manager.json</code> mit der Liste aller Umgebungsvariablen, die das Projekt benötigt.
+              </p>
+            </div>
+          ) : (
+            discoveredProjects.map(proj => {
+              const isSaving = isSavingProject[proj.name];
+              return (
+                <div key={proj.name} className={`${styles.projectCard} glass-panel`}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: "1rem" }}>
+                    <div>
+                      <h3 style={{ fontSize: "1.3rem", fontWeight: 700, color: "#fff" }}>{proj.name}</h3>
+                      <p style={{ fontSize: "0.8rem", color: "var(--text-muted)", fontFamily: "var(--font-mono)", marginTop: "0.25rem" }}>
+                        {proj.path}
+                      </p>
+                    </div>
+                    <button 
+                      onClick={() => handleApplyProject(proj.name)}
+                      disabled={isSaving}
+                      className="btn btn-primary"
+                    >
+                      {isSaving ? (
+                        <>
+                          <svg className="spinner" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10" strokeDasharray="30 15"></circle></svg>
+                          <span>Wird angewendet...</span>
+                        </>
+                      ) : (
+                        <>
+                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
+                          <span>Speichern & Anwenden</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+
+                  <table className={styles.mappingTable}>
+                    <thead>
+                      <tr>
+                        <th style={{ width: "25%" }}>Umgebungsvariable</th>
+                        <th style={{ width: "35%" }}>Beschreibung</th>
+                        <th style={{ width: "40%" }}>Zugeordnete Ressource</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {proj.requirements.map(req => {
+                        const currentVal = (pendingLinks[proj.name] || {})[req.key] || "";
+                        return (
+                          <tr key={req.key}>
+                            <td>
+                              <span className={styles.mappingKey}>{req.key}</span>
+                            </td>
+                            <td>
+                              <span className={styles.mappingDesc}>{req.description || "Keine Beschreibung hinterlegt"}</span>
+                            </td>
+                            <td>
+                              <select 
+                                value={currentVal}
+                                onChange={e => handleLinkChange(proj.name, req.key, e.target.value)}
+                                className={styles.selectField}
+                              >
+                                <option value="">-- Nicht verknüpft (Leerwert) --</option>
+                                {req.type === "database" ? (
+                                  <optgroup label="Datenbanken (Postgres & MongoDB)">
+                                    {registeredDbs
+                                      .filter(db => !req.dbType || db.type === req.dbType)
+                                      .map(db => (
+                                        <option key={db.id} value={db.id}>
+                                          {db.alias} ({db.type})
+                                        </option>
+                                      ))
+                                    }
+                                  </optgroup>
+                                ) : (
+                                  <optgroup label="Zugangsdaten / Keys">
+                                    {registeredCreds.map(cred => (
+                                      <option key={cred.id} value={cred.id}>
+                                        {cred.alias} ({cred.key})
+                                      </option>
+                                    ))
+                                    }
+                                  </optgroup>
+                                )}
+                              </select>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              );
+            })
+          )}
+        </div>
       )}
     </div>
   );
