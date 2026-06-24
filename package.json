@@ -10,13 +10,16 @@
   },
   "dependencies": {
     "jose": "^6.2.3",
+    "mongodb": "^7.3.0",
     "next": "16.2.9",
+    "pg": "^8.22.0",
     "pm2": "^7.0.1",
     "react": "19.2.4",
     "react-dom": "19.2.4"
   },
   "devDependencies": {
     "@types/node": "^20",
+    "@types/pg": "^8.20.0",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",

@@ -312,6 +312,83 @@
   opacity: 0.5;
 }
 
+/* Tabs System */
+.tabsContainer {
+  display: flex;
+  gap: 1rem;
+  border-bottom: 1px solid var(--border-glass);
+  padding-bottom: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.tabButton {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  font-family: var(--font-heading);
+  font-size: 1.1rem;
+  font-weight: 600;
+  padding: 0.5rem 1rem;
+  cursor: pointer;
+  position: relative;
+  transition: var(--transition-fast);
+  user-select: none;
+}
+
+.tabButton:hover {
+  color: #fff;
+}
+
+.tabButtonActive {
+  color: var(--primary);
+}
+
+.tabButtonActive::after {
+  content: "";
+  position: absolute;
+  bottom: -0.6rem;
+  left: 0;
+  width: 100%;
+  height: 2px;
+  background: linear-gradient(90deg, var(--primary), var(--secondary));
+  box-shadow: 0 0 8px var(--primary);
+}
+
+/* Database specific styles */
+.dbTypeIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-glass);
+}
+
+.dbTypePostgres {
+  color: #336791;
+  background: rgba(51, 103, 145, 0.1);
+  border-color: rgba(51, 103, 145, 0.2);
+}
+
+.dbTypeMongodb {
+  color: #47A248;
+  background: rgba(71, 162, 72, 0.1);
+  border-color: rgba(71, 162, 72, 0.2);
+}
+
+.dbMaskedUri {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  max-width: 300px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: help;
+}
+
 /* Animations */
 @keyframes fadeIn {
   from {
