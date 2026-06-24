@@ -108,10 +108,15 @@ jobs:
             # Build application
             npm run build
             
-            # Reload or start application in PM2
+            # Load environment variables from .env
+            if [ -f ".env" ]; then
+              export $(grep -v '^#' .env | xargs)
+            fi
+            
+            # Reload or start application in PM2 with environment variables updated
             if pm2 describe process-manager > /dev/null 2>&1; then
               echo "Reloading process-manager..."
-              pm2 reload process-manager
+              pm2 reload process-manager --update-env
             else
               echo "Starting process-manager for the first time..."
               pm2 start node_modules/next/dist/bin/next --name "process-manager" -- start
