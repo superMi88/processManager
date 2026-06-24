@@ -71,8 +71,10 @@ jobs:
             else
               # Update remote URL with the fresh temporary GITHUB_TOKEN
               git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
-              git pull origin main
+              git fetch origin main
+              git reset --hard origin/main
             fi
+
             
             # Create .env if it does not exist
             if [ ! -f ".env" ]; then

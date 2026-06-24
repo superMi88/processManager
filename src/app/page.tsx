@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import styles from "./dashboard.module.css";
 
 interface ProcessInfo {
@@ -15,31 +16,14 @@ interface ProcessInfo {
   restarts: number;
 }
 
-interface DatabaseInfo {
-  type: "postgres" | "mongodb" | "unknown";
-  name: string;
-  host: string;
-  user: string;
-  sourceProcess: string;
-  status: "online" | "offline";
-  sizeBytes: number;
-  connectionCount?: number;
-  tablesCount?: number;
-  collectionsCount?: number;
-  documentsCount?: number;
-  maskedUri: string;
-  error?: string;
-}
+
 
 export default function DashboardPage() {
   const [processes, setProcesses] = useState<ProcessInfo[]>([]);
-  const [databases, setDatabases] = useState<DatabaseInfo[]>([]);
-  const [activeTab, setActiveTab] = useState<"processes" | "databases">("processes");
   const [selectedProcess, setSelectedProcess] = useState<ProcessInfo | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
   const [userEmail, setUserEmail] = useState("");
   const [isLoading, setIsLoading] = useState(true);
-  const [isDbsLoading, setIsDbsLoading] = useState(true);
   const [isLogsLoading, setIsLogsLoading] = useState(false);
   const [actionInProgress, setActionInProgress] = useState<Record<string, boolean>>({});
   
@@ -67,22 +51,7 @@ export default function DashboardPage() {
     }
   }, [router]);
 
-  // Fetch databases list
-  const fetchDatabases = useCallback(async (showLoading = false) => {
-    if (showLoading) setIsDbsLoading(true);
-    try {
-      const response = await fetch("/api/databases");
-      if (!response.ok) {
-        throw new Error("Failed to fetch databases");
-      }
-      const data = await response.json();
-      setDatabases(data);
-    } catch (error) {
-      console.error("Error fetching databases:", error);
-    } finally {
-      setIsDbsLoading(false);
-    }
-  }, []);
+
 
   // Fetch user session info
   const fetchSession = useCallback(async () => {
@@ -161,17 +130,15 @@ export default function DashboardPage() {
     const initializeDashboard = async () => {
       await fetchSession();
       await fetchProcesses(true);
-      await fetchDatabases(true);
     };
     initializeDashboard();
 
     const processInterval = setInterval(() => {
       fetchProcesses(false);
-      fetchDatabases(false);
     }, 3000);
 
     return () => clearInterval(processInterval);
-  }, [fetchSession, fetchProcesses, fetchDatabases]);
+  }, [fetchSession, fetchProcesses]);
 
   // Poll logs if a process is selected
   useEffect(() => {
@@ -348,32 +315,17 @@ export default function DashboardPage() {
         </div>
       </section>
 
-      {/* Tabs Switcher */}
+      {/* Navigation Switcher */}
       <div className={styles.tabsContainer}>
-        <button
-          onClick={() => {
-            setActiveTab("processes");
-            setSelectedProcess(null);
-            setLogs([]);
-          }}
-          className={`${styles.tabButton} ${activeTab === "processes" ? styles.tabButtonActive : ""}`}
-        >
+        <span className={`${styles.tabButton} ${styles.tabButtonActive}`}>
           PM2 Prozesse
-        </button>
-        <button
-          onClick={() => {
-            setActiveTab("databases");
-            setSelectedProcess(null);
-            setLogs([]);
-          }}
-          className={`${styles.tabButton} ${activeTab === "databases" ? styles.tabButtonActive : ""}`}
-        >
+        </span>
+        <Link href="/databases" className={styles.tabButton}>
           Datenbanken (Auto-Discovery)
-        </button>
+        </Link>
       </div>
 
-      {activeTab === "processes" ? (
-        <>
+      <>
           {/* Main Content: Processes Table */}
           <section>
             <div className={styles.sectionHeader}>
@@ -607,142 +559,6 @@ export default function DashboardPage() {
             </section>
           )}
         </>
-      ) : (
-        /* Databases Auto-Discovery view */
-        <section>
-          <div className={styles.sectionHeader}>
-            <h2 className={styles.sectionTitle}>Datenbanken (Auto-Discovery)</h2>
-          </div>
-
-          {isDbsLoading ? (
-            <div className="glass-panel" style={{ padding: "4rem", textAlign: "center" }}>
-              <svg
-                className="spinner"
-                width="36"
-                height="36"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="var(--primary)"
-                strokeWidth="2.5"
-              >
-                <circle cx="12" cy="12" r="10" strokeDasharray="40 20"></circle>
-              </svg>
-              <p style={{ marginTop: "1rem", color: "var(--text-secondary)" }}>Datenbanken werden gescannt...</p>
-            </div>
-          ) : databases.length === 0 ? (
-            <div className={`${styles.tableWrapper} glass-panel`}>
-              <div className={styles.emptyState}>
-                <svg
-                  className={styles.emptyStateIcon}
-                  width="48"
-                  height="48"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                >
-                  <circle cx="12" cy="12" r="10"></circle>
-                  <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path>
-                </svg>
-                <p>Keine Datenbanken automatisch erkannt.</p>
-                <p style={{ fontSize: "0.85rem", color: "var(--text-muted)", maxWidth: "450px", margin: "0 auto" }}>
-                  Der Scanner sucht in den Umgebungsvariablen aktiver PM2-Prozesse nach Verbindungsparametern (wie <code>DATABASE_URL</code> oder <code>MONGODB_URI</code>).
-                </p>
-              </div>
-            </div>
-          ) : (
-            <div className={styles.tableWrapper}>
-              <table className={styles.processTable}>
-                <thead>
-                  <tr>
-                    <th>Typ</th>
-                    <th>Name / Host</th>
-                    <th>PM2-Quelle</th>
-                    <th>Benutzer</th>
-                    <th>Status</th>
-                    <th>Größe</th>
-                    <th>Statistiken / Details</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {databases.map((db, idx) => (
-                    <tr key={idx}>
-                      <td>
-                        <div
-                          className={`${styles.dbTypeIcon} ${
-                            db.type === "postgres" ? styles.dbTypePostgres : styles.dbTypeMongodb
-                          }`}
-                          title={db.type}
-                        >
-                          {db.type === "postgres" ? "PG" : "MG"}
-                        </div>
-                      </td>
-                      <td>
-                        <div className={styles.processName}>
-                          <span>{db.name}</span>
-                          <span className={styles.pmId}>{db.host}</span>
-                        </div>
-                        <div className={styles.dbMaskedUri} title={db.maskedUri}>
-                          {db.maskedUri}
-                        </div>
-                      </td>
-                      <td>
-                        <span className={styles.pmId}>{db.sourceProcess}</span>
-                      </td>
-                      <td className={styles.monoText}>{db.user}</td>
-                      <td>
-                        {db.status === "online" ? (
-                          <span className="badge badge-online">
-                            <span className="pulse-dot pulse-dot-online"></span>Online
-                          </span>
-                        ) : (
-                          <span className="badge badge-stopped" title={db.error}>
-                            <span className="pulse-dot pulse-dot-stopped"></span>Offline
-                          </span>
-                        )}
-                      </td>
-                      <td className={styles.monoText}>
-                        {db.status === "online" ? formatMemory(db.sizeBytes) : "—"}
-                      </td>
-                      <td>
-                        {db.status === "online" ? (
-                          <div style={{ fontSize: "0.85rem", color: "var(--text-secondary)" }}>
-                            {db.type === "postgres" && (
-                              <>
-                                <div>Tabellen: <strong>{db.tablesCount ?? 0}</strong></div>
-                                <div>Verbindungen: <strong>{db.connectionCount ?? 0}</strong></div>
-                              </>
-                            )}
-                            {db.type === "mongodb" && (
-                              <>
-                                <div>Collections: <strong>{db.collectionsCount ?? 0}</strong></div>
-                                <div>Dokumente: <strong>{db.documentsCount?.toLocaleString() ?? 0}</strong></div>
-                              </>
-                            )}
-                          </div>
-                        ) : (
-                          <span 
-                            style={{ 
-                              fontSize: "0.75rem", 
-                              color: "var(--danger)", 
-                              maxWidth: "200px", 
-                              display: "inline-block", 
-                              wordBreak: "break-word" 
-                            }} 
-                            title={db.error}
-                          >
-                            {db.error || "Verbindungsfehler"}
-                          </span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </section>
-      )}
     </div>
   );
 }
