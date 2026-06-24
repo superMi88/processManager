@@ -1,4 +1,4 @@
-// Shim process.getBuiltinModule for older Node versions (like v20.15.0) which bson/mongodb uses
+// Shim process.getBuiltinModule for Node versions where bson/mongodb requires it
 if (typeof process !== "undefined") {
   const procObj = process as unknown as { getBuiltinModule?: () => unknown };
   if (!procObj.getBuiltinModule) {
@@ -6,10 +6,10 @@ if (typeof process !== "undefined") {
   }
 }
 
-import pm2 from "pm2";
 import { Client } from "pg";
-
-
+import net from "net";
+import fs from "fs";
+import path from "path";
 
 export interface DatabaseInfo {
   type: "postgres" | "mongodb" | "unknown";
@@ -27,49 +27,36 @@ export interface DatabaseInfo {
   error?: string;
 }
 
-// Mock databases for development mode
-const mockDatabases: DatabaseInfo[] = [
-  {
-    type: "postgres",
-    name: "kisystem",
-    host: "localhost:5432",
-    user: "ki_admin",
-    sourceProcess: "kisystem",
-    status: "online",
-    sizeBytes: 48.2 * 1024 * 1024,
-    connectionCount: 5,
-    tablesCount: 14,
-    maskedUri: "postgresql://ki_admin:*****@localhost:5432/kisystem?schema=public",
-  },
-  {
-    type: "mongodb",
-    name: "discord-logs",
-    host: "localhost:27017",
-    user: "db_user",
-    sourceProcess: "discordBot",
-    status: "online",
-    sizeBytes: 124.5 * 1024 * 1024,
-    collectionsCount: 8,
-    documentsCount: 142500,
-    maskedUri: "mongodb://db_user:*****@localhost:27017/discord-logs",
-  },
-  {
-    type: "postgres",
-    name: "auth-db",
-    host: "localhost:5432",
-    user: "api_user",
-    sourceProcess: "api-server",
-    status: "offline",
-    sizeBytes: 0,
-    maskedUri: "postgresql://api_user:*****@localhost:5432/auth-db",
-    error: "Connection refused: no process listening on port 5432",
-  },
-];
+// Helper to check if a TCP port is open
+function isPortOpen(host: string, port: number, timeout = 1500): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = new net.Socket();
+    let open = false;
+
+    socket.setTimeout(timeout);
+
+    socket.connect(port, host, () => {
+      open = true;
+      socket.end();
+    });
+
+    socket.on("timeout", () => {
+      socket.destroy();
+    });
+
+    socket.on("error", () => {
+      socket.destroy();
+    });
+
+    socket.on("close", () => {
+      resolve(open);
+    });
+  });
+}
 
 // Helper to mask credentials
 function maskConnectionString(uri: string): { host: string; database: string; user: string; maskedUri: string } {
   try {
-    // Basic cleanup for parsing: replace postgresql:// or mongodb:// with standard https:// so URL parser works cleanly for all
     let cleanUri = uri;
     if (uri.startsWith("postgres://")) {
       cleanUri = uri.replace("postgres://", "http://");
@@ -92,195 +79,342 @@ function maskConnectionString(uri: string): { host: string; database: string; us
     
     return { host, database, user, maskedUri };
   } catch (e) {
-    console.error("Failed to parse URI:", uri, e);
+    console.error("Failed to parse URI:", uri);
     return { host: "unknown", database: "unknown", user: "unknown", maskedUri: "invalid-uri" };
   }
 }
 
-// Check if PM2 is available, otherwise return mock
-function listPm2ProcessesRaw(): Promise<pm2.ProcessDescription[]> {
-  return new Promise((resolve, reject) => {
-    pm2.connect(true, (connectErr) => {
-      if (connectErr) {
-        return reject(connectErr);
-      }
-      pm2.list((listErr, list) => {
-        pm2.disconnect();
-        if (listErr) {
-          return reject(listErr);
+// Crawl workspace sibling folders to discover database connection strings in .env files
+function discoverUrisFromEnvFiles(): { uri: string; source: string }[] {
+  const discovered: { uri: string; source: string }[] = [];
+  
+  // Read current .env file
+  try {
+    const localEnvPath = path.resolve(process.cwd(), ".env");
+    if (fs.existsSync(localEnvPath)) {
+      const content = fs.readFileSync(localEnvPath, "utf-8");
+      parseEnvContent(content, "processManager").forEach(uri => discovered.push(uri));
+    }
+  } catch (e) {
+    console.error("Failed to read local env file:", e);
+  }
+
+  // Scan sibling folders
+  const parentDir = path.resolve(process.cwd(), "..");
+  try {
+    if (fs.existsSync(parentDir)) {
+      const dirs = fs.readdirSync(parentDir);
+      for (const dir of dirs) {
+        if (dir === "processManager") continue; // already checked
+        const fullDir = path.join(parentDir, dir);
+        try {
+          const stat = fs.statSync(fullDir);
+          if (stat.isDirectory()) {
+            const envPath = path.join(fullDir, ".env");
+            if (fs.existsSync(envPath)) {
+              const content = fs.readFileSync(envPath, "utf-8");
+              parseEnvContent(content, dir).forEach(uri => discovered.push(uri));
+            }
+          }
+        } catch (e) {
+          // Ignore files or directories that raise stat errors
         }
-        resolve(list);
-      });
-    });
-  });
+      }
+    }
+  } catch (e) {
+    console.error("Failed to scan sibling directories for env files:", e);
+  }
+  
+  return discovered;
 }
 
-async function getPostgresStats(connectionString: string) {
+// Parse lines of a .env file and extract connection URIs
+function parseEnvContent(content: string, projectName: string): { uri: string; source: string }[] {
+  const results: { uri: string; source: string }[] = [];
+  const lines = content.split("\n");
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed && !trimmed.startsWith("#") && trimmed.includes("=")) {
+      const eqIdx = trimmed.indexOf("=");
+      const key = trimmed.substring(0, eqIdx).trim();
+      let val = trimmed.substring(eqIdx + 1).trim();
+      
+      if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+        val = val.substring(1, val.length - 1);
+      }
+      
+      const connectionKeys = ["DATABASE_URL", "MONGODB_URI", "MONGO_URL", "MONGO_URI"];
+      if (connectionKeys.includes(key) && val.includes("://")) {
+        results.push({ uri: val, source: projectName });
+      }
+    }
+  }
+  return results;
+}
+
+// Retrieve stats for PostgreSQL database(s)
+async function getPostgresStats(connectionString: string): Promise<Partial<DatabaseInfo>[]> {
   const client = new Client({ connectionString, connectionTimeoutMillis: 3000 });
   try {
     await client.connect();
     
-    const sizeRes = await client.query("SELECT pg_database_size(current_database()) as size_bytes");
-    const sizeBytes = parseInt(sizeRes.rows[0]?.size_bytes || "0", 10);
+    const currDbRes = await client.query("SELECT current_database() as db");
+    const currentDb = currDbRes.rows[0]?.db || "postgres";
     
-    const tablesRes = await client.query(
-      "SELECT count(*) as count FROM information_schema.tables WHERE table_schema = 'public'"
-    );
-    const tablesCount = parseInt(tablesRes.rows[0]?.count || "0", 10);
+    let rows: any[] = [];
+    try {
+      // Fetch size and connections for all non-system databases in this cluster
+      const dbsRes = await client.query(`
+        SELECT 
+          d.datname as name, 
+          pg_database_size(d.datname) as size_bytes,
+          (SELECT count(*) FROM pg_stat_activity WHERE datname = d.datname) as connection_count
+        FROM pg_database d
+        WHERE d.datistemplate = false AND d.datname NOT IN ('postgres', 'template1', 'template2')
+      `);
+      rows = dbsRes.rows;
+    } catch (e) {
+      // Fallback: If permissions prevent reading pg_database, query the connected database
+      const sizeRes = await client.query("SELECT pg_database_size(current_database()) as size_bytes");
+      const sizeBytes = parseInt(sizeRes.rows[0]?.size_bytes || "0", 10);
+      
+      const connRes = await client.query(
+        "SELECT count(*) as count FROM pg_stat_activity WHERE datname = current_database()"
+      );
+      const connectionsCount = parseInt(connRes.rows[0]?.count || "0", 10);
+      
+      rows = [{
+        name: currentDb,
+        size_bytes: sizeBytes,
+        connection_count: connectionsCount
+      }];
+    }
     
-    const connRes = await client.query(
-      "SELECT count(*) as count FROM pg_stat_activity WHERE datname = current_database()"
-    );
-    const connectionsCount = parseInt(connRes.rows[0]?.count || "0", 10);
+    const results: Partial<DatabaseInfo>[] = [];
+    for (const row of rows) {
+      const dbName = row.name;
+      const sizeBytes = parseInt(row.size_bytes || "0", 10);
+      const connectionsCount = parseInt(row.connection_count || "0", 10);
+      
+      let tablesCount = 0;
+      if (dbName === currentDb) {
+        try {
+          const tablesRes = await client.query(
+            "SELECT count(*) as count FROM information_schema.tables WHERE table_schema = 'public'"
+          );
+          tablesCount = parseInt(tablesRes.rows[0]?.count || "0", 10);
+        } catch {}
+      }
+      
+      results.push({
+        name: dbName,
+        status: "online",
+        sizeBytes,
+        connectionCount: connectionsCount,
+        tablesCount: dbName === currentDb ? tablesCount : undefined,
+      });
+    }
     
     await client.end();
-    
-    return {
-      status: "online" as const,
-      sizeBytes,
-      tablesCount,
-      connectionsCount,
-    };
+    return results;
   } catch (error) {
     try {
       await client.end();
     } catch {}
-    return {
-      status: "offline" as const,
-      error: error instanceof Error ? error.message : String(error),
-      sizeBytes: 0,
-      tablesCount: 0,
-      connectionsCount: 0,
-    };
+    throw error;
   }
 }
 
-async function getMongoStats(connectionString: string) {
+// Retrieve stats for MongoDB database(s)
+async function getMongoStats(connectionString: string): Promise<Partial<DatabaseInfo>[]> {
   const { MongoClient } = await import("mongodb");
   const client = new MongoClient(connectionString, { serverSelectionTimeoutMS: 3000 });
   try {
     await client.connect();
     
-    // Parse DB name
     const cleanUri = connectionString.startsWith("mongodb+srv://")
       ? connectionString.replace("mongodb+srv://", "http://")
       : connectionString.replace("mongodb://", "http://");
     const parsed = new URL(cleanUri);
-    const dbName = parsed.pathname.substring(1) || "test";
+    const dbName = parsed.pathname.substring(1) || "";
     
-    const db = client.db(dbName);
-    const stats = await db.command({ dbStats: 1 });
-    
-    const collectionsCount = stats.collections || 0;
-    const documentsCount = stats.objects || 0;
-    const sizeBytes = stats.dataSize || 0;
+    const results: Partial<DatabaseInfo>[] = [];
+    if (dbName) {
+      const db = client.db(dbName);
+      const stats = await db.command({ dbStats: 1 });
+      results.push({
+        name: dbName,
+        status: "online",
+        sizeBytes: stats.dataSize || 0,
+        collectionsCount: stats.collections || 0,
+        documentsCount: stats.objects || 0,
+      });
+    } else {
+      // List all user databases
+      const adminDb = client.db().admin();
+      const list = await adminDb.listDatabases();
+      for (const dbInfo of list.databases) {
+        if (dbInfo.name === "admin" || dbInfo.name === "config" || dbInfo.name === "local") continue;
+        try {
+          const db = client.db(dbInfo.name);
+          const stats = await db.command({ dbStats: 1 });
+          results.push({
+            name: dbInfo.name,
+            status: "online",
+            sizeBytes: stats.dataSize || 0,
+            collectionsCount: stats.collections || 0,
+            documentsCount: stats.objects || 0,
+          });
+        } catch {}
+      }
+      
+      if (results.length === 0) {
+        results.push({
+          name: "test",
+          status: "online",
+          sizeBytes: 0,
+          collectionsCount: 0,
+          documentsCount: 0,
+        });
+      }
+    }
     
     await client.close();
-    
-    return {
-      status: "online" as const,
-      sizeBytes,
-      collectionsCount,
-      documentsCount,
-    };
+    return results;
   } catch (error) {
     try {
       await client.close();
     } catch {}
-    return {
-      status: "offline" as const,
-      error: error instanceof Error ? error.message : String(error),
-      sizeBytes: 0,
-      collectionsCount: 0,
-      documentsCount: 0,
-    };
+    throw error;
   }
 }
 
 export async function scanDatabases(): Promise<DatabaseInfo[]> {
-  let pm2Processes: pm2.ProcessDescription[] = [];
-  let isMockMode = false;
-
-  try {
-    pm2Processes = await listPm2ProcessesRaw();
-  } catch (error) {
-    console.warn("Could not retrieve PM2 processes for database scanning. Using mock databases.", error);
-    isMockMode = true;
-  }
-
-  if (isMockMode || pm2Processes.length === 0) {
-    // In mock mode, we simulate slight resource variations
-    return mockDatabases.map((db) => {
-      if (db.status === "online") {
-        return {
-          ...db,
-          sizeBytes: db.sizeBytes + Math.round((Math.random() - 0.5) * 10000),
-          connectionCount: db.connectionCount ? Math.max(1, db.connectionCount + Math.round((Math.random() - 0.5) * 2)) : undefined,
-        };
-      }
-      return db;
-    });
-  }
-
   const detectedDatabases: DatabaseInfo[] = [];
 
-  for (const proc of pm2Processes) {
-    const envs = (proc.pm2_env || {}) as Record<string, string | number | boolean | undefined>;
-    const processName = proc.name || "unknown";
+  // 1. Gather all connection URIs from workspace environment config files
+  const discovered = discoverUrisFromEnvFiles();
+
+  // 2. Add fallback targets for standard database setups
+  const fallbacks = [
+    { uri: "postgresql://postgres:postgres@localhost:5432/postgres", source: "system-default" },
+    { uri: "postgresql://admin:password123@localhost:5435/kisystem?schema=public", source: "system-default" },
+    { uri: "mongodb://localhost:27017", source: "system-default" }
+  ];
+
+  // Merge discovered envs and fallbacks
+  const allTargetsMap = new Map<string, { uri: string; source: string; isFallback: boolean }>();
+  
+  discovered.forEach((item) => {
+    allTargetsMap.set(item.uri, { ...item, isFallback: false });
+  });
+  
+  fallbacks.forEach((item) => {
+    // If we already have this URI or a highly similar one, skip adding the fallback
+    if (!allTargetsMap.has(item.uri)) {
+      allTargetsMap.set(item.uri, { ...item, isFallback: true });
+    }
+  });
+
+  const targets = Array.from(allTargetsMap.values());
+
+  // 3. Scan and probe each target
+  for (const target of targets) {
+    const { uri, source, isFallback } = target;
     
-    // We look for common environment variable keys
-    const connectionKeys = ["DATABASE_URL", "MONGODB_URI", "MONGO_URL", "MONGO_URI", "REDIS_URL", "MYSQL_URL"];
-    
-    for (const key of connectionKeys) {
-      const uri = envs[key];
-      if (uri && typeof uri === "string" && uri.includes("://")) {
-        // Determine type
-        let type: "postgres" | "mongodb" | "unknown" = "unknown";
-        if (uri.startsWith("postgres://") || uri.startsWith("postgresql://")) {
-          type = "postgres";
-        } else if (uri.startsWith("mongodb://") || uri.startsWith("mongodb+srv://")) {
-          type = "mongodb";
+    let type: "postgres" | "mongodb" | "unknown" = "unknown";
+    let cleanUri = uri;
+    if (uri.startsWith("postgres://") || uri.startsWith("postgresql://")) {
+      cleanUri = uri.replace("postgres://", "http://").replace("postgresql://", "http://");
+      type = "postgres";
+    } else if (uri.startsWith("mongodb://") || uri.startsWith("mongodb+srv://")) {
+      cleanUri = uri.replace("mongodb://", "http://").replace("mongodb+srv://", "http://");
+      type = "mongodb";
+    }
+
+    if (type === "unknown") continue;
+
+    try {
+      const parsed = new URL(cleanUri);
+      const hostname = parsed.hostname || "localhost";
+      const port = parsed.port ? parseInt(parsed.port, 10) : (type === "postgres" ? 5432 : 27017);
+      
+      const { host, database, user, maskedUri } = maskConnectionString(uri);
+
+      // Check if host port is listening
+      const portOpen = await isPortOpen(hostname, port);
+      
+      if (!portOpen) {
+        // If port is closed and it was discovered in a project config, report it as offline.
+        // Otherwise, skip standard fallbacks that are not listening on the system to avoid cluttering the UI.
+        if (!isFallback) {
+          detectedDatabases.push({
+            type,
+            name: database,
+            host,
+            user,
+            sourceProcess: source,
+            status: "offline",
+            sizeBytes: 0,
+            maskedUri,
+            error: `Connection refused: database server is not running on port ${port}`
+          });
         }
+        continue;
+      }
 
-        if (type === "unknown") continue;
-
-        // Check if we already processed this connection string (avoid duplicates)
-        const isDuplicate = detectedDatabases.some(d => d.maskedUri === maskConnectionString(uri).maskedUri);
-        if (isDuplicate) continue;
-
-        const { host, database, user, maskedUri } = maskConnectionString(uri);
-
-        let stats: {
-          status: "online" | "offline";
-          sizeBytes: number;
-          error?: string;
-          tablesCount?: number;
-          connectionsCount?: number;
-          collectionsCount?: number;
-          documentsCount?: number;
-        } = { status: "offline", sizeBytes: 0 };
+      // Port is open! Database service is running on the system.
+      try {
         if (type === "postgres") {
-          stats = await getPostgresStats(uri);
+          const dbStatsList = await getPostgresStats(uri);
+          dbStatsList.forEach((stats) => {
+            detectedDatabases.push({
+              type,
+              name: stats.name || database,
+              host,
+              user,
+              sourceProcess: source,
+              status: "online",
+              sizeBytes: stats.sizeBytes || 0,
+              connectionCount: stats.connectionCount,
+              tablesCount: stats.tablesCount,
+              maskedUri,
+            });
+          });
         } else if (type === "mongodb") {
-          stats = await getMongoStats(uri);
+          const dbStatsList = await getMongoStats(uri);
+          dbStatsList.forEach((stats) => {
+            detectedDatabases.push({
+              type,
+              name: stats.name || database,
+              host,
+              user,
+              sourceProcess: source,
+              status: "online",
+              sizeBytes: stats.sizeBytes || 0,
+              collectionsCount: stats.collectionsCount,
+              documentsCount: stats.documentsCount,
+              maskedUri,
+            });
+          });
         }
-
+      } catch (clientError) {
+        // TCP port is open, but connection handshake or authorization failed.
+        // Report as online since the database process is running, but display auth details / error.
         detectedDatabases.push({
           type,
           name: database,
           host,
           user,
-          sourceProcess: processName,
-          status: stats.status,
-          sizeBytes: stats.sizeBytes,
-          connectionCount: stats.connectionsCount,
-          tablesCount: stats.tablesCount,
-          collectionsCount: stats.collectionsCount,
-          documentsCount: stats.documentsCount,
+          sourceProcess: source,
+          status: "online",
+          sizeBytes: 0,
           maskedUri,
-          error: stats.error,
+          error: clientError instanceof Error ? clientError.message : String(clientError),
         });
       }
+    } catch (parseError) {
+      console.error("Failed to process database scan target:", uri, parseError);
     }
   }
 
