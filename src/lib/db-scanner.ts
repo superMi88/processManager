@@ -1,7 +1,9 @@
 // Shim process.getBuiltinModule for older Node versions (like v20.15.0) which bson/mongodb uses
-if (typeof process !== "undefined" && !process.getBuiltinModule) {
-  // @ts-expect-error: getBuiltinModule is missing in Node v20.15.0 but called by bson
-  process.getBuiltinModule = () => ({});
+if (typeof process !== "undefined") {
+  const procObj = process as unknown as { getBuiltinModule?: () => unknown };
+  if (!procObj.getBuiltinModule) {
+    procObj.getBuiltinModule = () => ({});
+  }
 }
 
 import pm2 from "pm2";
@@ -223,7 +225,7 @@ export async function scanDatabases(): Promise<DatabaseInfo[]> {
   const detectedDatabases: DatabaseInfo[] = [];
 
   for (const proc of pm2Processes) {
-    const envs = proc.pm2_env || {};
+    const envs = (proc.pm2_env || {}) as Record<string, string | number | boolean | undefined>;
     const processName = proc.name || "unknown";
     
     // We look for common environment variable keys
