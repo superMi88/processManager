@@ -198,8 +198,12 @@ async function getPostgresStats(connectionString: string): Promise<Partial<Datab
     const results: Partial<DatabaseInfo>[] = [];
     for (const row of rows) {
       const dbName = row.name;
-      const sizeBytes = parseInt(row.size_bytes || "0", 10);
-      const connectionsCount = parseInt(row.connection_count || "0", 10);
+      const sizeBytes = typeof row.size_bytes === "number"
+        ? row.size_bytes
+        : parseInt(String(row.size_bytes || "0"), 10);
+      const connectionsCount = typeof row.connection_count === "number"
+        ? row.connection_count
+        : parseInt(String(row.connection_count || "0"), 10);
       
       let tablesCount = 0;
       if (dbName === currentDb) {
