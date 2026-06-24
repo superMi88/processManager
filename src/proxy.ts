@@ -41,6 +41,12 @@ export async function proxy(request: NextRequest) {
     }
   }
 
+  // Redirect legacy databases page to unified dashboard page
+  if (pathname === "/databases") {
+    const dashboardUrl = new URL("/", request.url);
+    return NextResponse.redirect(dashboardUrl);
+  }
+
   // Redirect logged-in users away from /login to dashboard /
   if (isLoginPage && hasValidToken) {
     const dashboardUrl = new URL("/", request.url);

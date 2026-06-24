@@ -2,7 +2,6 @@
 
 import { useEffect, useState, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import Link from "next/link";
 import styles from "./dashboard.module.css";
 
 interface ProcessInfo {
@@ -16,14 +15,30 @@ interface ProcessInfo {
   restarts: number;
 }
 
-
+interface DatabaseInfo {
+  type: "postgres" | "mongodb" | "unknown";
+  name: string;
+  host: string;
+  user: string;
+  sourceProcess: string;
+  status: "online" | "offline";
+  sizeBytes: number;
+  connectionCount?: number;
+  tablesCount?: number;
+  collectionsCount?: number;
+  documentsCount?: number;
+  maskedUri: string;
+  error?: string;
+}
 
 export default function DashboardPage() {
   const [processes, setProcesses] = useState<ProcessInfo[]>([]);
+  const [databases, setDatabases] = useState<DatabaseInfo[]>([]);
   const [selectedProcess, setSelectedProcess] = useState<ProcessInfo | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
   const [userEmail, setUserEmail] = useState("");
   const [isLoading, setIsLoading] = useState(true);
+  const [isDbsLoading, setIsDbsLoading] = useState(true);
   const [isLogsLoading, setIsLogsLoading] = useState(false);
   const [actionInProgress, setActionInProgress] = useState<Record<string, boolean>>({});
   
@@ -51,7 +66,26 @@ export default function DashboardPage() {
     }
   }, [router]);
 
-
+  // Fetch databases list
+  const fetchDatabases = useCallback(async (showLoading = false) => {
+    if (showLoading) setIsDbsLoading(true);
+    try {
+      const response = await fetch("/api/databases");
+      if (!response.ok) {
+        if (response.status === 401) {
+          router.push("/login");
+          return;
+        }
+        throw new Error("Failed to fetch databases");
+      }
+      const data = await response.json();
+      setDatabases(data);
+    } catch (error) {
+      console.error("Error fetching databases:", error);
+    } finally {
+      setIsDbsLoading(false);
+    }
+  }, [router]);
 
   // Fetch user session info
   const fetchSession = useCallback(async () => {
@@ -60,11 +94,13 @@ export default function DashboardPage() {
       if (response.ok) {
         const data = await response.json();
         setUserEmail(data.email || "Admin");
+      } else if (response.status === 401) {
+        router.push("/login");
       }
     } catch (error) {
       console.error("Error fetching session:", error);
     }
-  }, []);
+  }, [router]);
 
   // Fetch process logs
   const fetchLogs = useCallback(async (processName: string, isSilent = false) => {
@@ -130,6 +166,7 @@ export default function DashboardPage() {
     const initializeDashboard = async () => {
       await fetchSession();
       await fetchProcesses(true);
+      await fetchDatabases(true);
     };
     initializeDashboard();
 
@@ -137,8 +174,15 @@ export default function DashboardPage() {
       fetchProcesses(false);
     }, 3000);
 
-    return () => clearInterval(processInterval);
-  }, [fetchSession, fetchProcesses]);
+    const dbInterval = setInterval(() => {
+      fetchDatabases(false);
+    }, 3000);
+
+    return () => {
+      clearInterval(processInterval);
+      clearInterval(dbInterval);
+    };
+  }, [fetchSession, fetchProcesses, fetchDatabases]);
 
   // Poll logs if a process is selected
   useEffect(() => {
@@ -166,7 +210,7 @@ export default function DashboardPage() {
     }
   }, [logs]);
 
-  // Stats calculations
+  // PM2 Stats calculations
   const totalProcesses = processes.length;
   const runningProcesses = processes.filter((p) => p.status === "online").length;
   const stoppedProcesses = processes.filter((p) => p.status === "stopped" || p.status === "errored").length;
@@ -181,6 +225,14 @@ export default function DashboardPage() {
   const totalMemoryBytes = processes
     .filter((p) => p.status === "online")
     .reduce((sum, p) => sum + p.memory, 0);
+
+  // Database Stats calculations
+  const totalDatabases = databases.length;
+  const onlineDatabases = databases.filter((db) => db.status === "online").length;
+  const offlineDatabases = databases.filter((db) => db.status === "offline").length;
+  const totalDbsSizeBytes = databases
+    .filter((db) => db.status === "online")
+    .reduce((sum, db) => sum + db.sizeBytes, 0);
 
   // Helper: Format Memory bytes
   const formatMemory = (bytes: number) => {
@@ -233,7 +285,14 @@ export default function DashboardPage() {
           <p className={styles.userInfo}>Angemeldet als: <strong>{userEmail}</strong></p>
         </div>
         <div className={styles.headerRight}>
-          <button onClick={() => fetchProcesses(true)} className="btn btn-secondary" title="Aktualisieren">
+          <button 
+            onClick={() => {
+              fetchProcesses(true);
+              fetchDatabases(true);
+            }} 
+            className="btn btn-secondary" 
+            title="Aktualisieren"
+          >
             <svg
               width="16"
               height="16"
@@ -268,8 +327,9 @@ export default function DashboardPage() {
         </div>
       </header>
 
-      {/* System Resources Stats Grid */}
+      {/* System Resources & DB Stats Grid */}
       <section className={styles.statsGrid}>
+        {/* PM2 Processes Card */}
         <div className={`${styles.statCard} glass-panel`}>
           <div className={styles.statHeader}>
             <span>Gesamt Prozesse</span>
@@ -286,6 +346,7 @@ export default function DashboardPage() {
           </div>
         </div>
 
+        {/* CPU Card */}
         <div className={`${styles.statCard} glass-panel`}>
           <div className={styles.statHeader}>
             <span>CPU-Auslastung (PM2)</span>
@@ -303,6 +364,7 @@ export default function DashboardPage() {
           </div>
         </div>
 
+        {/* RAM Card */}
         <div className={`${styles.statCard} glass-panel`}>
           <div className={styles.statHeader}>
             <span>Arbeitsspeicher (PM2)</span>
@@ -311,254 +373,407 @@ export default function DashboardPage() {
             </svg>
           </div>
           <div className={styles.statValue}>{formatMemory(totalMemoryBytes)}</div>
-          <div className={styles.statDetails}>Gesamter RAM aller aktiven PM2-Prozesse</div>
+          <div className={styles.statDetails}>RAM aller aktiven PM2-Prozesse</div>
+        </div>
+
+        {/* Databases Count Card */}
+        <div className={`${styles.statCard} glass-panel`}>
+          <div className={styles.statHeader}>
+            <span>Erkannte Datenbanken</span>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" strokeWidth="2">
+              <path d="M12 22c5.523 0 10-2.239 10-5s-4.477-5-10-5S2 14.239 2 17s4.477 5 10 5z"></path>
+              <path d="M22 17v-5c0-2.761-4.477-5-10-5S2 9.239 2 12v5"></path>
+              <path d="M22 12V7c0-2.761-4.477-5-10-5S2 4.239 2 7v5"></path>
+            </svg>
+          </div>
+          <div className={styles.statValue}>{totalDatabases}</div>
+          <div className={styles.statDetails}>
+            {onlineDatabases} Online &bull; {offlineDatabases} Offline
+          </div>
+        </div>
+
+        {/* Database Storage Card */}
+        <div className={`${styles.statCard} glass-panel`}>
+          <div className={styles.statHeader}>
+            <span>Gesamte Datengröße</span>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--secondary)" strokeWidth="2">
+              <ellipse cx="12" cy="5" rx="9" ry="3"></ellipse>
+              <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path>
+              <path d="M3 12c0 1.66 4 3 9 3s9-1.34 9-3"></path>
+            </svg>
+          </div>
+          <div className={styles.statValue}>{formatMemory(totalDbsSizeBytes)}</div>
+          <div className={styles.statDetails}>Speicherplatz aller aktiven DBs</div>
         </div>
       </section>
 
-      {/* Navigation Switcher */}
-      <div className={styles.tabsContainer}>
-        <span className={`${styles.tabButton} ${styles.tabButtonActive}`}>
-          PM2 Prozesse
-        </span>
-        <Link href="/databases" className={styles.tabButton}>
-          Datenbanken (Auto-Discovery)
-        </Link>
-      </div>
+      {/* Main Content: Processes Table */}
+      <section>
+        <div className={styles.sectionHeader}>
+          <h2 className={styles.sectionTitle}>PM2 Prozesse</h2>
+        </div>
 
-      <>
-          {/* Main Content: Processes Table */}
-          <section>
-            <div className={styles.sectionHeader}>
-              <h2 className={styles.sectionTitle}>PM2 Prozesse</h2>
+        {isLoading ? (
+          <div className="glass-panel" style={{ padding: "4rem", textAlign: "center" }}>
+            <svg
+              className="spinner"
+              width="36"
+              height="36"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="var(--primary)"
+              strokeWidth="2.5"
+            >
+              <circle cx="12" cy="12" r="10" strokeDasharray="40 20"></circle>
+            </svg>
+            <p style={{ marginTop: "1rem", color: "var(--text-secondary)" }}>Prozessliste wird geladen...</p>
+          </div>
+        ) : processes.length === 0 ? (
+          <div className={`${styles.tableWrapper} glass-panel`}>
+            <div className={styles.emptyState}>
+              <svg
+                className={styles.emptyStateIcon}
+                width="48"
+                height="48"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+              >
+                <circle cx="12" cy="12" r="10"></circle>
+                <line x1="8" y1="12" x2="16" y2="12"></line>
+              </svg>
+              <p>Keine PM2-Prozesse gefunden.</p>
+              <p style={{ fontSize: "0.85rem", color: "var(--text-muted)" }}>
+                Stelle sicher, dass PM2 auf dem Server läuft und Prozesse registriert sind.
+              </p>
             </div>
+          </div>
+        ) : (
+          <div className={styles.tableWrapper}>
+            <table className={styles.processTable}>
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Status</th>
+                  <th>CPU</th>
+                  <th>RAM</th>
+                  <th>Restarts</th>
+                  <th>Uptime</th>
+                  <th>Aktionen</th>
+                </tr>
+              </thead>
+              <tbody>
+                {processes.map((proc) => {
+                  const isStarting = actionInProgress[`${proc.name}-start`];
+                  const isStopping = actionInProgress[`${proc.name}-stop`];
+                  const isRestarting = actionInProgress[`${proc.name}-restart`];
+                  const isAnyAction = isStarting || isStopping || isRestarting;
 
-            {isLoading ? (
-              <div className="glass-panel" style={{ padding: "4rem", textAlign: "center" }}>
-                <svg
-                  className="spinner"
-                  width="36"
-                  height="36"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="var(--primary)"
-                  strokeWidth="2.5"
-                >
-                  <circle cx="12" cy="12" r="10" strokeDasharray="40 20"></circle>
-                </svg>
-                <p style={{ marginTop: "1rem", color: "var(--text-secondary)" }}>Prozessliste wird geladen...</p>
-              </div>
-            ) : processes.length === 0 ? (
-              <div className={`${styles.tableWrapper} glass-panel`}>
-                <div className={styles.emptyState}>
-                  <svg
-                    className={styles.emptyStateIcon}
-                    width="48"
-                    height="48"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.5"
-                  >
-                    <circle cx="12" cy="12" r="10"></circle>
-                    <line x1="8" y1="12" x2="16" y2="12"></line>
-                  </svg>
-                  <p>Keine PM2-Prozesse gefunden.</p>
-                  <p style={{ fontSize: "0.85rem", color: "var(--text-muted)" }}>
-                    Stelle sicher, dass PM2 auf dem Server läuft und Prozesse registriert sind.
-                  </p>
-                </div>
-              </div>
-            ) : (
-              <div className={styles.tableWrapper}>
-                <table className={styles.processTable}>
-                  <thead>
-                    <tr>
-                      <th>Name</th>
-                      <th>Status</th>
-                      <th>CPU</th>
-                      <th>RAM</th>
-                      <th>Restarts</th>
-                      <th>Uptime</th>
-                      <th>Aktionen</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {processes.map((proc) => {
-                      const isStarting = actionInProgress[`${proc.name}-start`];
-                      const isStopping = actionInProgress[`${proc.name}-stop`];
-                      const isRestarting = actionInProgress[`${proc.name}-restart`];
-                      const isAnyAction = isStarting || isStopping || isRestarting;
-
-                      return (
-                        <tr 
-                          key={proc.id + "-" + proc.name}
-                          style={{
-                            background: selectedProcess?.name === proc.name ? "rgba(59, 130, 246, 0.05)" : undefined,
-                          }}
-                        >
-                          <td>
-                            <div className={styles.processName}>
-                              <span>{proc.name}</span>
-                              <span className={styles.pmId}>ID: {proc.id}</span>
-                              {proc.pid > 0 && <span className={styles.pmId}>PID: {proc.pid}</span>}
-                            </div>
-                          </td>
-                          <td>{getStatusBadge(proc.status)}</td>
-                          <td className={styles.monoText}>{proc.status === "online" ? `${proc.cpu}%` : "—"}</td>
-                          <td className={styles.monoText}>{proc.status === "online" ? formatMemory(proc.memory) : "—"}</td>
-                          <td className={styles.monoText}>{proc.restarts}</td>
-                          <td className={styles.monoText}>{formatUptime(proc.uptime)}</td>
-                          <td>
-                            <div className={styles.actionsCell}>
-                              {proc.status === "online" ? (
-                                <button
-                                  onClick={() => handleProcessAction(proc.name, "stop")}
-                                  disabled={isAnyAction}
-                                  className={`${styles.actionBtn} ${styles.actionBtnStop}`}
-                                  title="Stoppen"
-                                >
-                                  {isStopping ? (
-                                    <svg className="spinner" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10" strokeDasharray="30 15"></circle></svg>
-                                  ) : (
-                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect></svg>
-                                  )}
-                                </button>
-                              ) : (
-                                <button
-                                  onClick={() => handleProcessAction(proc.name, "start")}
-                                  disabled={isAnyAction}
-                                  className={`${styles.actionBtn} ${styles.actionBtnStart}`}
-                                  title="Starten"
-                                >
-                                  {isStarting ? (
-                                    <svg className="spinner" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10" strokeDasharray="30 15"></circle></svg>
-                                  ) : (
-                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
-                                  )}
-                                </button>
-                              )}
-
-                              <button
-                                onClick={() => handleProcessAction(proc.name, "restart")}
-                                disabled={isAnyAction}
-                                className={`${styles.actionBtn} ${styles.actionBtnRestart}`}
-                                title="Neustarten"
-                              >
-                                {isRestarting ? (
-                                  <svg className="spinner" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10" strokeDasharray="30 15"></circle></svg>
-                                ) : (
-                                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"></path></svg>
-                                )}
-                              </button>
-
-                              <button
-                                onClick={() => {
-                                  if (selectedProcess?.name === proc.name) {
-                                    setSelectedProcess(null);
-                                    setLogs([]);
-                                  } else {
-                                    setSelectedProcess(proc);
-                                  }
-                                }}
-                                className={styles.actionBtn}
-                                style={{
-                                  background: selectedProcess?.name === proc.name ? "rgba(59, 130, 246, 0.2)" : undefined,
-                                  borderColor: selectedProcess?.name === proc.name ? "var(--primary)" : undefined,
-                                  color: selectedProcess?.name === proc.name ? "#fff" : undefined,
-                                }}
-                                title="Logs anzeigen"
-                              >
-                                <svg
-                                  width="16"
-                                  height="16"
-                                  viewBox="0 0 24 24"
-                                  fill="none"
-                                  stroke="currentColor"
-                                  strokeWidth="2"
-                                  strokeLinecap="round"
-                                  strokeLinejoin="round"
-                                >
-                                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-                                  <polyline points="14 2 14 8 20 8"></polyline>
-                                  <line x1="16" y1="13" x2="8" y2="13"></line>
-                                  <line x1="16" y1="17" x2="8" y2="17"></line>
-                                  <polyline points="10 9 9 9 8 9"></polyline>
-                                </svg>
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </section>
-
-          {/* Logs View Panel */}
-          {selectedProcess && (
-            <section className={styles.logsSection}>
-              <div className={styles.logsPanel}>
-                <div className={styles.logsHeader}>
-                  <div className={styles.logsTitle}>
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <polyline points="4 17 10 11 4 5"></polyline>
-                      <line x1="12" y1="19" x2="20" y2="19"></line>
-                    </svg>
-                    <span>Logs: <strong>{selectedProcess.name}</strong></span>
-                  </div>
-                  <div className={styles.logsHeaderRight}>
-                    {isLogsLoading && (
-                      <svg className="spinner" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--text-secondary)" strokeWidth="2">
-                        <circle cx="12" cy="12" r="10" strokeDasharray="30 15"></circle>
-                      </svg>
-                    )}
-                    <span style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>Live-Aktualisierung (3s)</span>
-                    <button
-                      onClick={() => {
-                        setSelectedProcess(null);
-                        setLogs([]);
+                  return (
+                    <tr 
+                      key={proc.id + "-" + proc.name}
+                      style={{
+                        background: selectedProcess?.name === proc.name ? "rgba(59, 130, 246, 0.05)" : undefined,
                       }}
-                      className="btn btn-secondary btn-icon"
-                      style={{ width: "28px", height: "28px", borderRadius: "6px" }}
-                      title="Schließen"
                     >
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                        <line x1="18" y1="6" x2="6" y2="18"></line>
-                        <line x1="6" y1="6" x2="18" y2="18"></line>
-                      </svg>
-                    </button>
-                  </div>
-                </div>
-                
-                <div ref={consoleRef} className={styles.logsConsole}>
-                  {logs.length === 0 ? (
-                    <div className={styles.logLine + " " + styles.logLineSystem}>
-                      Warte auf Log-Daten...
-                    </div>
-                  ) : (
-                    logs.map((line, idx) => {
-                      let lineClass = styles.logLine;
-                      if (line.startsWith("[STDOUT]")) {
-                        lineClass += ` ${styles.logLineStdout}`;
-                      } else if (line.startsWith("[STDERR]")) {
-                        lineClass += ` ${styles.logLineStderr}`;
-                      } else if (line.startsWith("[SYSTEM]")) {
-                        lineClass += ` ${styles.logLineSystem}`;
-                      }
-                      return (
-                        <div key={idx} className={lineClass}>
-                          {line}
+                      <td>
+                        <div className={styles.processName}>
+                          <span>{proc.name}</span>
+                          <span className={styles.pmId}>ID: {proc.id}</span>
+                          {proc.pid > 0 && <span className={styles.pmId}>PID: {proc.pid}</span>}
                         </div>
-                      );
-                    })
-                  )}
-                </div>
+                      </td>
+                      <td>{getStatusBadge(proc.status)}</td>
+                      <td className={styles.monoText}>{proc.status === "online" ? `${proc.cpu}%` : "—"}</td>
+                      <td className={styles.monoText}>{proc.status === "online" ? formatMemory(proc.memory) : "—"}</td>
+                      <td className={styles.monoText}>{proc.restarts}</td>
+                      <td className={styles.monoText}>{formatUptime(proc.uptime)}</td>
+                      <td>
+                        <div className={styles.actionsCell}>
+                          {proc.status === "online" ? (
+                            <button
+                              onClick={() => handleProcessAction(proc.name, "stop")}
+                              disabled={isAnyAction}
+                              className={`${styles.actionBtn} ${styles.actionBtnStop}`}
+                              title="Stoppen"
+                            >
+                              {isStopping ? (
+                                <svg className="spinner" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10" strokeDasharray="30 15"></circle></svg>
+                              ) : (
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect></svg>
+                              )}
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => handleProcessAction(proc.name, "start")}
+                              disabled={isAnyAction}
+                              className={`${styles.actionBtn} ${styles.actionBtnStart}`}
+                              title="Starten"
+                            >
+                              {isStarting ? (
+                                <svg className="spinner" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10" strokeDasharray="30 15"></circle></svg>
+                              ) : (
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                              )}
+                            </button>
+                          )}
+
+                          <button
+                            onClick={() => handleProcessAction(proc.name, "restart")}
+                            disabled={isAnyAction}
+                            className={`${styles.actionBtn} ${styles.actionBtnRestart}`}
+                            title="Neustarten"
+                          >
+                            {isRestarting ? (
+                              <svg className="spinner" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10" strokeDasharray="30 15"></circle></svg>
+                            ) : (
+                              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"></path></svg>
+                            )}
+                          </button>
+
+                          <button
+                            onClick={() => {
+                              if (selectedProcess?.name === proc.name) {
+                                setSelectedProcess(null);
+                                setLogs([]);
+                              } else {
+                                setSelectedProcess(proc);
+                              }
+                            }}
+                            className={styles.actionBtn}
+                            style={{
+                              background: selectedProcess?.name === proc.name ? "rgba(59, 130, 246, 0.2)" : undefined,
+                              borderColor: selectedProcess?.name === proc.name ? "var(--primary)" : undefined,
+                              color: selectedProcess?.name === proc.name ? "#fff" : undefined,
+                            }}
+                            title="Logs anzeigen"
+                          >
+                            <svg
+                              width="16"
+                              height="16"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="2"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            >
+                              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                              <polyline points="14 2 14 8 20 8"></polyline>
+                              <line x1="16" y1="13" x2="8" y2="13"></line>
+                              <line x1="16" y1="17" x2="8" y2="17"></line>
+                              <polyline points="10 9 9 9 8 9"></polyline>
+                            </svg>
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      {/* Databases Discovery view */}
+      <section style={{ marginTop: "1rem" }}>
+        <div className={styles.sectionHeader}>
+          <h2 className={styles.sectionTitle}>Datenbanken (Auto-Discovery)</h2>
+        </div>
+
+        {isDbsLoading ? (
+          <div className="glass-panel" style={{ padding: "4rem", textAlign: "center" }}>
+            <svg
+              className="spinner"
+              width="36"
+              height="36"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="var(--primary)"
+              strokeWidth="2.5"
+            >
+              <circle cx="12" cy="12" r="10" strokeDasharray="40 20"></circle>
+            </svg>
+            <p style={{ marginTop: "1rem", color: "var(--text-secondary)" }}>Datenbanken werden gescannt...</p>
+          </div>
+        ) : databases.length === 0 ? (
+          <div className={`${styles.tableWrapper} glass-panel`}>
+            <div className={styles.emptyState}>
+              <svg
+                className={styles.emptyStateIcon}
+                width="48"
+                height="48"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+              >
+                <circle cx="12" cy="12" r="10"></circle>
+                <line x1="8" y1="12" x2="16" y2="12"></line>
+              </svg>
+              <p>Keine Datenbanken automatisch erkannt.</p>
+              <p style={{ fontSize: "0.85rem", color: "var(--text-muted)", maxWidth: "450px", margin: "0 auto" }}>
+                Der Scanner sucht in den Umgebungsvariablen aktiver PM2-Prozesse nach Verbindungsparametern (wie <code>DATABASE_URL</code> oder <code>MONGODB_URI</code>).
+              </p>
+            </div>
+          </div>
+        ) : (
+          <div className={styles.tableWrapper}>
+            <table className={styles.processTable}>
+              <thead>
+                <tr>
+                  <th>Typ</th>
+                  <th>Name / Host</th>
+                  <th>PM2-Quelle</th>
+                  <th>Benutzer</th>
+                  <th>Status</th>
+                  <th>Größe</th>
+                  <th>Statistiken / Details</th>
+                </tr>
+              </thead>
+              <tbody>
+                {databases.map((db, idx) => (
+                  <tr key={idx}>
+                    <td>
+                      <div
+                        className={`${styles.dbTypeIcon} ${
+                          db.type === "postgres" ? styles.dbTypePostgres : styles.dbTypeMongodb
+                        }`}
+                        title={db.type}
+                      >
+                        {db.type === "postgres" ? "PG" : "MG"}
+                      </div>
+                    </td>
+                    <td>
+                      <div className={styles.processName}>
+                        <span>{db.name}</span>
+                        <span className={styles.pmId}>{db.host}</span>
+                      </div>
+                      <div className={styles.dbMaskedUri} title={db.maskedUri}>
+                        {db.maskedUri}
+                      </div>
+                    </td>
+                    <td>
+                      <span className={styles.pmId}>{db.sourceProcess}</span>
+                    </td>
+                    <td className={styles.monoText}>{db.user}</td>
+                    <td>
+                      {db.status === "online" ? (
+                        <span className="badge badge-online">
+                          <span className="pulse-dot pulse-dot-online"></span>Online
+                        </span>
+                      ) : (
+                        <span className="badge badge-stopped" title={db.error}>
+                          <span className="pulse-dot pulse-dot-stopped"></span>Offline
+                        </span>
+                      )}
+                    </td>
+                    <td className={styles.monoText}>
+                      {db.status === "online" ? formatMemory(db.sizeBytes) : "—"}
+                    </td>
+                    <td>
+                      {db.status === "online" ? (
+                        <div style={{ fontSize: "0.85rem", color: "var(--text-secondary)" }}>
+                          {db.type === "postgres" && (
+                            <>
+                              <div>Tabellen: <strong>{db.tablesCount ?? 0}</strong></div>
+                              <div>Verbindungen: <strong>{db.connectionCount ?? 0}</strong></div>
+                            </>
+                          )}
+                          {db.type === "mongodb" && (
+                            <>
+                              <div>Collections: <strong>{db.collectionsCount ?? 0}</strong></div>
+                              <div>Dokumente: <strong>{db.documentsCount?.toLocaleString() ?? 0}</strong></div>
+                            </>
+                          )}
+                        </div>
+                      ) : (
+                        <span 
+                          style={{ 
+                            fontSize: "0.75rem", 
+                            color: "var(--danger)", 
+                            maxWidth: "200px", 
+                            display: "inline-block", 
+                            wordBreak: "break-word" 
+                          }} 
+                          title={db.error}
+                        >
+                          {db.error || "Verbindungsfehler"}
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      {/* Logs View Panel */}
+      {selectedProcess && (
+        <section className={styles.logsSection}>
+          <div className={styles.logsPanel}>
+            <div className={styles.logsHeader}>
+              <div className={styles.logsTitle}>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="4 17 10 11 4 5"></polyline>
+                  <line x1="12" y1="19" x2="20" y2="19"></line>
+                </svg>
+                <span>Logs: <strong>{selectedProcess.name}</strong></span>
               </div>
-            </section>
-          )}
-        </>
+              <div className={styles.logsHeaderRight}>
+                {isLogsLoading && (
+                  <svg className="spinner" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--text-secondary)" strokeWidth="2">
+                    <circle cx="12" cy="12" r="10" strokeDasharray="30 15"></circle>
+                  </svg>
+                )}
+                <span style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>Live-Aktualisierung (3s)</span>
+                <button
+                  onClick={() => {
+                    setSelectedProcess(null);
+                    setLogs([]);
+                  }}
+                  className="btn btn-secondary btn-icon"
+                  style={{ width: "28px", height: "28px", borderRadius: "6px" }}
+                  title="Schließen"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                  </svg>
+                </button>
+              </div>
+            </div>
+            
+            <div ref={consoleRef} className={styles.logsConsole}>
+              {logs.length === 0 ? (
+                <div className={styles.logLine + " " + styles.logLineSystem}>
+                  Warte auf Log-Daten...
+                </div>
+              ) : (
+                logs.map((line, idx) => {
+                  let lineClass = styles.logLine;
+                  if (line.startsWith("[STDOUT]")) {
+                    lineClass += ` ${styles.logLineStdout}`;
+                  } else if (line.startsWith("[STDERR]")) {
+                    lineClass += ` ${styles.logLineStderr}`;
+                  } else if (line.startsWith("[SYSTEM]")) {
+                    lineClass += ` ${styles.logLineSystem}`;
+                  }
+                  return (
+                    <div key={idx} className={lineClass}>
+                      {line}
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        </section>
+      )}
     </div>
   );
 }
