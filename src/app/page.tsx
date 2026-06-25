@@ -704,11 +704,16 @@ export default function DashboardPage() {
 
   useEffect(() => {
     if (activeTab !== "keys") return;
-    fetchPorts(false);
+    const timer = setTimeout(() => {
+      fetchPorts(false);
+    }, 0);
     const interval = setInterval(() => {
       fetchPorts(false);
     }, 5000);
-    return () => clearInterval(interval);
+    return () => {
+      clearTimeout(timer);
+      clearInterval(interval);
+    };
   }, [activeTab, fetchPorts]);
 
   // Poll logs if a process is selected
@@ -1866,7 +1871,7 @@ export default function DashboardPage() {
                     className="input-field" 
                     required 
                   />
-                  <span className={styles.helperText}>Wird meistens 'PORT' genannt.</span>
+                  <span className={styles.helperText}>Wird meistens &apos;PORT&apos; genannt.</span>
                 </div>
 
                 <div className="input-group">
