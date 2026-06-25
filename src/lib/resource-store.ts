@@ -19,6 +19,7 @@ export interface CredentialConfig {
   alias: string;
   key: string;
   value: string;
+  type?: "google" | "port";
 }
 
 export interface ProjectRequirement {

@@ -29,7 +29,7 @@ export interface DatabaseInfo {
 }
 
 // Helper to check if a TCP port is open
-function isPortOpen(host: string, port: number, timeout = 1500): Promise<boolean> {
+export function isPortOpen(host: string, port: number, timeout = 1500): Promise<boolean> {
   return new Promise((resolve) => {
     const socket = new net.Socket();
     let open = false;

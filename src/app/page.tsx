@@ -49,6 +49,7 @@ interface RegisteredCredential {
   alias: string;
   key: string;
   value: string;
+  type?: "google" | "port";
 }
 
 interface ProjectRequirement {
@@ -80,12 +81,30 @@ export default function DashboardPage() {
   const router = useRouter();
   const consoleRef = useRef<HTMLDivElement>(null);
 
-  const [activeTab, setActiveTab] = useState<"dashboard" | "resources" | "projects">("dashboard");
+  const [activeTab, setActiveTab] = useState<"dashboard" | "databases" | "keys" | "projects">("dashboard");
   const [registeredDbs, setRegisteredDbs] = useState<RegisteredDatabase[]>([]);
   const [registeredCreds, setRegisteredCreds] = useState<RegisteredCredential[]>([]);
   const [discoveredProjects, setDiscoveredProjects] = useState<DiscoveredProject[]>([]);
   const [isResourcesLoading, setIsResourcesLoading] = useState(true);
   const [isProjectsLoading, setIsProjectsLoading] = useState(true);
+  const [scannedPorts, setScannedPorts] = useState<{ port: number; inUse: boolean; registered: boolean; alias: string | null; credentialId: string | null; projectName: string | null }[]>([]);
+  const [isPortsLoading, setIsPortsLoading] = useState(false);
+  
+  // Google Key Form states
+  const [googleAlias, setGoogleAlias] = useState("");
+  const [googleKeyName, setGoogleKeyName] = useState("GOOGLE_API_KEY");
+  const [googleValue, setGoogleValue] = useState("");
+  const [editingGoogleId, setEditingGoogleId] = useState<string | null>(null);
+  const [googleKeyCustomMode, setGoogleKeyCustomMode] = useState(false);
+  const [customGoogleKey, setCustomGoogleKey] = useState("");
+
+  // Port Form states
+  const [portAlias, setPortAlias] = useState("");
+  const [portKeyName, setPortKeyName] = useState("PORT");
+  const [selectedPort, setSelectedPort] = useState("");
+  const [customPortValue, setCustomPortValue] = useState("");
+  const [portCustomMode, setPortCustomMode] = useState(false);
+  const [editingPortId, setEditingPortId] = useState<string | null>(null);
   
   // Database form state
   const [dbAlias, setDbAlias] = useState("");
@@ -109,11 +128,7 @@ export default function DashboardPage() {
   const [selectedAdminDbId, setSelectedAdminDbId] = useState<string>("custom");
   const [isProvisioningLoading, setIsProvisioningLoading] = useState(false);
 
-  // Credential form state
-  const [credAlias, setCredAlias] = useState("");
-  const [credKey, setCredKey] = useState("");
-  const [credValue, setCredValue] = useState("");
-  const [editingCredId, setEditingCredId] = useState<string | null>(null);
+
   
   // Project mapping changes state (projectName -> envKey -> resourceId)
   const [pendingLinks, setPendingLinks] = useState<Record<string, Record<string, string>>>({});
@@ -154,6 +169,119 @@ export default function DashboardPage() {
       setIsProjectsLoading(false);
     }
   }, []);
+
+  const fetchPorts = useCallback(async (showLoading = false) => {
+    if (showLoading) setIsPortsLoading(true);
+    try {
+      const response = await fetch("/api/manager/ports");
+      if (response.ok) {
+        const data = await response.json();
+        setScannedPorts(data.ports || []);
+      }
+    } catch (error) {
+      console.error("Error fetching ports:", error);
+    } finally {
+      setIsPortsLoading(false);
+    }
+  }, []);
+
+  // Save Google Key
+  const handleSaveGoogleKey = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const finalKey = googleKeyCustomMode ? customGoogleKey : googleKeyName;
+    if (!googleAlias || !finalKey || !googleValue) {
+      alert("Bitte fülle alle Pflichtfelder für den Google API Key aus.");
+      return;
+    }
+    
+    const credData = {
+      id: editingGoogleId || undefined,
+      alias: googleAlias,
+      key: finalKey,
+      value: googleValue,
+      type: "google"
+    };
+
+    try {
+      const res = await fetch("/api/manager/resources", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "save", type: "credential", data: credData })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setRegisteredCreds(data.credentials || []);
+        setGoogleAlias("");
+        setGoogleValue("");
+        setCustomGoogleKey("");
+        setGoogleKeyCustomMode(false);
+        setGoogleKeyName("GOOGLE_API_KEY");
+        setEditingGoogleId(null);
+        alert("Google API Key erfolgreich gespeichert!");
+        fetchProjects();
+      } else {
+        const err = await res.json();
+        alert(`Fehler beim Speichern: ${err.error}`);
+      }
+    } catch (err) {
+      console.error(err);
+      alert("Fehler beim Speichern des Google API Keys.");
+    }
+  };
+
+  // Save Port
+  const handleSavePort = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const finalPortValue = portCustomMode ? customPortValue : selectedPort;
+    const finalKey = portKeyName || "PORT";
+    if (!portAlias || !finalPortValue) {
+      alert("Bitte fülle alle Pflichtfelder für den Port aus.");
+      return;
+    }
+    
+    const duplicate = registeredCreds.find(c => {
+      const isPort = c.type === "port" || c.key === "PORT" || c.key.includes("PORT");
+      return isPort && c.value === finalPortValue && c.id !== editingPortId;
+    });
+    if (duplicate) {
+      alert(`Dieser Port (${finalPortValue}) wird bereits als '${duplicate.alias}' verwendet!`);
+      return;
+    }
+
+    const credData = {
+      id: editingPortId || undefined,
+      alias: portAlias,
+      key: finalKey,
+      value: finalPortValue,
+      type: "port"
+    };
+
+    try {
+      const res = await fetch("/api/manager/resources", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "save", type: "credential", data: credData })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setRegisteredCreds(data.credentials || []);
+        setPortAlias("");
+        setSelectedPort("");
+        setCustomPortValue("");
+        setPortCustomMode(false);
+        setEditingPortId(null);
+        alert("Port erfolgreich gespeichert!");
+        fetchProjects();
+        fetchPorts(true);
+      } else {
+        const err = await res.json();
+        alert(`Fehler beim Speichern: ${err.error}`);
+      }
+    } catch (err) {
+      console.error(err);
+      alert("Fehler beim Speichern des Ports.");
+    }
+  };
 
   // Save database
   const handleSaveDatabase = async (e: React.FormEvent) => {
@@ -355,46 +483,6 @@ export default function DashboardPage() {
     }
   };
 
-  // Save credential
-  const handleSaveCredential = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!credAlias || !credKey || !credValue) {
-      alert("Bitte fülle alle Felder für die Zugangsdaten aus.");
-      return;
-    }
-    
-    const credData = {
-      id: editingCredId || undefined,
-      alias: credAlias,
-      key: credKey,
-      value: credValue
-    };
-
-    try {
-      const res = await fetch("/api/manager/resources", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "save", type: "credential", data: credData })
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setRegisteredCreds(data.credentials || []);
-        setCredAlias("");
-        setCredKey("");
-        setCredValue("");
-        setEditingCredId(null);
-        alert("Zugangsdaten erfolgreich gespeichert!");
-        fetchProjects();
-      } else {
-        const err = await res.json();
-        alert(`Fehler beim Speichern: ${err.error}`);
-      }
-    } catch (err) {
-      console.error(err);
-      alert("Fehler beim Speichern der Zugangsdaten.");
-    }
-  };
-
   // Delete credential
   const handleDeleteCredential = async (id: string) => {
     if (!confirm("Möchtest du diese Zugangsdaten wirklich löschen? Alle Verknüpfungen werden ebenfalls entfernt.")) {
@@ -410,6 +498,7 @@ export default function DashboardPage() {
         const data = await res.json();
         setRegisteredCreds(data.credentials || []);
         fetchProjects();
+        fetchPorts(true);
       }
     } catch (err) {
       console.error(err);
@@ -430,12 +519,7 @@ export default function DashboardPage() {
     setDbSchema(db.schema || "public");
   };
 
-  const startEditCred = (cred: RegisteredCredential) => {
-    setEditingCredId(cred.id);
-    setCredAlias(cred.alias);
-    setCredKey(cred.key);
-    setCredValue(cred.value);
-  };
+
 
   // Handle mapping updates in dropdowns
   const handleLinkChange = (projectName: string, envKey: string, resourceId: string) => {
@@ -600,6 +684,7 @@ export default function DashboardPage() {
       await fetchDatabases(true);
       await fetchResources();
       await fetchProjects();
+      await fetchPorts(false);
     };
     initializeDashboard();
 
@@ -615,7 +700,16 @@ export default function DashboardPage() {
       clearInterval(processInterval);
       clearInterval(dbInterval);
     };
-  }, [fetchSession, fetchProcesses, fetchDatabases, fetchResources, fetchProjects]);
+  }, [fetchSession, fetchProcesses, fetchDatabases, fetchResources, fetchProjects, fetchPorts]);
+
+  useEffect(() => {
+    if (activeTab !== "keys") return;
+    fetchPorts(false);
+    const interval = setInterval(() => {
+      fetchPorts(false);
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [activeTab, fetchPorts]);
 
   // Poll logs if a process is selected
   useEffect(() => {
@@ -708,7 +802,15 @@ export default function DashboardPage() {
         return <span className="badge badge-errored"><span className="pulse-dot pulse-dot-errored"></span>{status}</span>;
     }
   };
+  const googleCreds = registeredCreds.filter(cred => {
+    if (cred.type) return cred.type === "google";
+    return !(cred.key === "PORT" || cred.key.includes("PORT"));
+  });
 
+  const portCreds = registeredCreds.filter(cred => {
+    if (cred.type) return cred.type === "port";
+    return cred.key === "PORT" || cred.key.includes("PORT");
+  });
   return (
     <div className={styles.container}>
       {/* Header */}
@@ -770,12 +872,23 @@ export default function DashboardPage() {
         </button>
         <button 
           onClick={() => {
-            setActiveTab("resources");
+            setActiveTab("databases");
+            fetchDatabases(true);
             fetchResources();
           }} 
-          className={`${styles.tabButton} ${activeTab === "resources" ? styles.tabButtonActive : ""}`}
+          className={`${styles.tabButton} ${activeTab === "databases" ? styles.tabButtonActive : ""}`}
         >
-          Datenbanken & Keys
+          Datenbanken
+        </button>
+        <button 
+          onClick={() => {
+            setActiveTab("keys");
+            fetchResources();
+            fetchPorts(true);
+          }} 
+          className={`${styles.tabButton} ${activeTab === "keys" ? styles.tabButtonActive : ""}`}
+        >
+          Keys & Ports
         </button>
         <button 
           onClick={() => {
@@ -1108,8 +1221,8 @@ export default function DashboardPage() {
         </>
       )}
 
-      {/* Tab: Datenbanken & Keys Manager */}
-      {activeTab === "resources" && (
+      {/* Tab: Datenbanken Manager */}
+      {activeTab === "databases" && (
         <div className="layout-main" style={{ animation: "fadeIn 0.3s ease-out" }}>
           <h2 className={styles.sectionTitle} style={{ marginBottom: "1rem" }}>Zentrale Datenbanken</h2>
           <div className={styles.settingsGrid} style={{ marginBottom: "3rem" }}>
@@ -1561,23 +1674,28 @@ export default function DashboardPage() {
               </div>
             );
           })()}
+        </div>
+      )}
 
-          {/* Credentials Section */}
-          <h2 className={styles.sectionTitle} style={{ marginBottom: "1rem" }}>Zentrale Zugangsdaten (API Keys, etc.)</h2>
-          <div className={styles.settingsGrid}>
-            {/* Credential Form Card */}
+      {/* Tab: Keys & Ports Manager */}
+      {activeTab === "keys" && (
+        <div className="layout-main" style={{ animation: "fadeIn 0.3s ease-out" }}>
+          {/* Google Keys Section */}
+          <h2 className={styles.sectionTitle} style={{ marginBottom: "1rem" }}>Zentrale Google API Keys</h2>
+          <div className={styles.settingsGrid} style={{ marginBottom: "3rem" }}>
+            {/* Google Key Form Card */}
             <div className={`${styles.settingsCard} glass-panel`}>
               <h3 style={{ fontSize: "1.2rem", fontWeight: 700 }}>
-                {editingCredId ? "Zugangsdaten bearbeiten" : "Zugangsdaten registrieren"}
+                {editingGoogleId ? "Google API Key bearbeiten" : "Google API Key registrieren"}
               </h3>
-              <form onSubmit={handleSaveCredential} style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+              <form onSubmit={handleSaveGoogleKey} style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
                 <div className="input-group">
                   <label className="input-label">Aliasname *</label>
                   <input 
                     type="text" 
-                    value={credAlias} 
-                    onChange={e => setCredAlias(e.target.value)} 
-                    placeholder="z. B. Google Client ID (Live)" 
+                    value={googleAlias} 
+                    onChange={e => setGoogleAlias(e.target.value)} 
+                    placeholder="z. B. Google AI Production" 
                     className="input-field" 
                     required 
                   />
@@ -1585,14 +1703,48 @@ export default function DashboardPage() {
                 
                 <div className="input-group">
                   <label className="input-label">Key *</label>
-                  <input 
-                    type="text" 
-                    value={credKey} 
-                    onChange={e => setCredKey(e.target.value)} 
-                    placeholder="z. B. GOOGLE_CLIENT_ID" 
-                    className="input-field" 
-                    required 
-                  />
+                  {!googleKeyCustomMode ? (
+                    <div style={{ display: "flex", gap: "0.5rem" }}>
+                      <select 
+                        value={googleKeyName} 
+                        onChange={e => {
+                          if (e.target.value === "custom") {
+                            setGoogleKeyCustomMode(true);
+                          } else {
+                            setGoogleKeyName(e.target.value);
+                          }
+                        }}
+                        className={styles.selectField}
+                        style={{ flex: 1 }}
+                      >
+                        <option value="GOOGLE_API_KEY">GOOGLE_API_KEY</option>
+                        <option value="custom">Anderer Google Key Name...</option>
+                      </select>
+                    </div>
+                  ) : (
+                    <div style={{ display: "flex", gap: "0.5rem" }}>
+                      <input 
+                        type="text" 
+                        value={customGoogleKey} 
+                        onChange={e => setCustomGoogleKey(e.target.value)} 
+                        placeholder="z. B. GOOGLE_CLIENT_ID" 
+                        className="input-field" 
+                        style={{ flex: 1 }}
+                        required 
+                      />
+                      <button 
+                        type="button" 
+                        onClick={() => {
+                          setGoogleKeyCustomMode(false);
+                          setGoogleKeyName("GOOGLE_API_KEY");
+                        }} 
+                        className="btn btn-secondary"
+                        style={{ padding: "0 0.75rem" }}
+                      >
+                        Standard
+                      </button>
+                    </div>
+                  )}
                   <span className={styles.helperText}>Dieser Key wird beim Generieren der .env-Datei verwendet.</span>
                 </div>
 
@@ -1600,8 +1752,8 @@ export default function DashboardPage() {
                   <label className="input-label">Wert *</label>
                   <input 
                     type="text" 
-                    value={credValue} 
-                    onChange={e => setCredValue(e.target.value)} 
+                    value={googleValue} 
+                    onChange={e => setGoogleValue(e.target.value)} 
                     placeholder="Geheimer Key-Wert" 
                     className="input-field" 
                     required 
@@ -1609,14 +1761,16 @@ export default function DashboardPage() {
                 </div>
 
                 <div className={styles.formActions}>
-                  {editingCredId && (
+                  {editingGoogleId && (
                     <button 
                       type="button" 
                       onClick={() => {
-                        setEditingCredId(null);
-                        setCredAlias("");
-                        setCredKey("");
-                        setCredValue("");
+                        setEditingGoogleId(null);
+                        setGoogleAlias("");
+                        setGoogleValue("");
+                        setCustomGoogleKey("");
+                        setGoogleKeyCustomMode(false);
+                        setGoogleKeyName("GOOGLE_API_KEY");
                       }} 
                       className="btn btn-secondary"
                     >
@@ -1630,18 +1784,18 @@ export default function DashboardPage() {
               </form>
             </div>
 
-            {/* Credential List Card */}
+            {/* Google Key List Card */}
             <div className={`${styles.settingsCard} glass-panel`}>
-              <h3 style={{ fontSize: "1.2rem", fontWeight: 700 }}>Registrierte Zugangsdaten</h3>
+              <h3 style={{ fontSize: "1.2rem", fontWeight: 700 }}>Registrierte Google Keys</h3>
               {isResourcesLoading ? (
                 <div style={{ textAlign: "center", padding: "2rem" }}>
                   <svg className="spinner" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" strokeWidth="2.5"><circle cx="12" cy="12" r="10" strokeDasharray="30 15"></circle></svg>
                 </div>
-              ) : registeredCreds.length === 0 ? (
-                <p style={{ color: "var(--text-muted)", fontStyle: "italic" }}>Keine Zugangsdaten registriert.</p>
+              ) : googleCreds.length === 0 ? (
+                <p style={{ color: "var(--text-muted)", fontStyle: "italic" }}>Keine Google API Keys registriert.</p>
               ) : (
                 <div className={styles.resourceList}>
-                  {registeredCreds.map(cred => (
+                  {googleCreds.map(cred => (
                     <div key={cred.id} className={styles.resourceItem}>
                       <div className={styles.resourceDetails}>
                         <span className={styles.resourceAlias}>{cred.alias}</span>
@@ -1650,7 +1804,24 @@ export default function DashboardPage() {
                         </span>
                       </div>
                       <div style={{ display: "flex", gap: "0.5rem" }}>
-                        <button onClick={() => startEditCred(cred)} className="btn btn-secondary btn-icon" style={{ width: "30px", height: "30px" }} title="Bearbeiten">
+                        <button 
+                          onClick={() => {
+                            setEditingGoogleId(cred.id);
+                            setGoogleAlias(cred.alias);
+                            setGoogleValue(cred.value);
+                            if (cred.key === "GOOGLE_API_KEY") {
+                              setGoogleKeyName("GOOGLE_API_KEY");
+                              setGoogleKeyCustomMode(false);
+                            } else {
+                              setGoogleKeyName("custom");
+                              setCustomGoogleKey(cred.key);
+                              setGoogleKeyCustomMode(true);
+                            }
+                          }} 
+                          className="btn btn-secondary btn-icon" 
+                          style={{ width: "30px", height: "30px" }} 
+                          title="Bearbeiten"
+                        >
                           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 1 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
                         </button>
                         <button onClick={() => handleDeleteCredential(cred.id)} className="btn btn-secondary btn-icon" style={{ width: "30px", height: "30px" }} title="Löschen">
@@ -1659,6 +1830,186 @@ export default function DashboardPage() {
                       </div>
                     </div>
                   ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Ports Section */}
+          <h2 className={styles.sectionTitle} style={{ marginBottom: "1rem" }}>System Ports</h2>
+          <div className={styles.settingsGrid}>
+            {/* Ports Form Card */}
+            <div className={`${styles.settingsCard} glass-panel`}>
+              <h3 style={{ fontSize: "1.2rem", fontWeight: 700 }}>
+                {editingPortId ? "Port bearbeiten" : "Port registrieren"}
+              </h3>
+              <form onSubmit={handleSavePort} style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+                <div className="input-group">
+                  <label className="input-label">Aliasname *</label>
+                  <input 
+                    type="text" 
+                    value={portAlias} 
+                    onChange={e => setPortAlias(e.target.value)} 
+                    placeholder="z. B. kiSystem Port" 
+                    className="input-field" 
+                    required 
+                  />
+                </div>
+
+                <div className="input-group">
+                  <label className="input-label">Key *</label>
+                  <input 
+                    type="text" 
+                    value={portKeyName} 
+                    onChange={e => setPortKeyName(e.target.value)} 
+                    placeholder="PORT" 
+                    className="input-field" 
+                    required 
+                  />
+                  <span className={styles.helperText}>Wird meistens 'PORT' genannt.</span>
+                </div>
+
+                <div className="input-group">
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.25rem" }}>
+                    <label className="input-label" style={{ marginBottom: 0 }}>Port Wert *</label>
+                    <label style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontSize: "0.8rem", color: "var(--text-secondary)", cursor: "pointer" }}>
+                      <input 
+                        type="checkbox" 
+                        checked={portCustomMode} 
+                        onChange={e => setPortCustomMode(e.target.checked)} 
+                      />
+                      Eigene Portnummer eingeben
+                    </label>
+                  </div>
+                  
+                  {!portCustomMode ? (
+                    <select 
+                      value={selectedPort} 
+                      onChange={e => {
+                        setSelectedPort(e.target.value);
+                        if (!portAlias && e.target.value) {
+                          setPortAlias(`Port ${e.target.value}`);
+                        }
+                      }} 
+                      className={styles.selectField}
+                      required
+                    >
+                      <option value="">-- Port auswählen --</option>
+                      {scannedPorts.map(p => {
+                        let statusText = "Frei";
+                        if (p.inUse) {
+                          statusText = p.projectName ? `Belegt (PM2: ${p.projectName})` : "Belegt (Aktiv)";
+                        } else if (p.registered) {
+                          statusText = p.projectName ? `Registriert (${p.projectName})` : "Registriert";
+                        }
+                        
+                        return (
+                          <option key={p.port} value={p.port}>
+                            Port {p.port} ({statusText})
+                          </option>
+                        );
+                      })}
+                    </select>
+                  ) : (
+                    <input 
+                      type="number" 
+                      value={customPortValue} 
+                      onChange={e => setCustomPortValue(e.target.value)} 
+                      placeholder="z. B. 3001" 
+                      className="input-field" 
+                      required 
+                    />
+                  )}
+                </div>
+
+                <div className={styles.formActions}>
+                  {editingPortId && (
+                    <button 
+                      type="button" 
+                      onClick={() => {
+                        setEditingPortId(null);
+                        setPortAlias("");
+                        setSelectedPort("");
+                        setCustomPortValue("");
+                        setPortCustomMode(false);
+                      }} 
+                      className="btn btn-secondary"
+                    >
+                      Abbrechen
+                    </button>
+                  )}
+                  <button type="submit" className="btn btn-primary" disabled={isPortsLoading}>
+                    Speichern
+                  </button>
+                </div>
+              </form>
+            </div>
+
+            {/* Ports List Card */}
+            <div className={`${styles.settingsCard} glass-panel`}>
+              <h3 style={{ fontSize: "1.2rem", fontWeight: 700 }}>Registrierte System Ports</h3>
+              {isResourcesLoading || isPortsLoading ? (
+                <div style={{ textAlign: "center", padding: "2rem" }}>
+                  <svg className="spinner" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" strokeWidth="2.5"><circle cx="12" cy="12" r="10" strokeDasharray="30 15"></circle></svg>
+                </div>
+              ) : portCreds.length === 0 ? (
+                <p style={{ color: "var(--text-muted)", fontStyle: "italic" }}>Keine Ports registriert.</p>
+              ) : (
+                <div className={styles.resourceList}>
+                  {portCreds.map(cred => {
+                    const portNum = parseInt(cred.value, 10);
+                    const matchingScan = scannedPorts.find(p => p.port === portNum);
+                    const isOnline = matchingScan ? matchingScan.inUse : false;
+
+                    return (
+                      <div key={cred.id} className={styles.resourceItem} style={{ borderLeft: isOnline ? "3px solid var(--success, #10b981)" : "3px solid var(--text-muted)" }}>
+                        <div className={styles.resourceDetails}>
+                          <span className={styles.resourceAlias} style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                            {cred.alias}
+                            <span style={{ 
+                              fontSize: "0.75rem", 
+                              padding: "0.05rem 0.4rem", 
+                              borderRadius: "4px", 
+                              background: isOnline ? "rgba(16, 185, 129, 0.15)" : "rgba(255,255,255,0.06)", 
+                              color: isOnline ? "var(--success, #10b981)" : "var(--text-secondary)" 
+                            }}>
+                              {isOnline ? "Aktiv/Listening" : "Inaktiv/Geschlossen"}
+                            </span>
+                          </span>
+                          <span className={styles.resourceSub}>
+                            {cred.key} = {cred.value}
+                          </span>
+                        </div>
+                        <div style={{ display: "flex", gap: "0.5rem" }}>
+                          <button 
+                            onClick={() => {
+                              setEditingPortId(cred.id);
+                              setPortAlias(cred.alias);
+                              setPortKeyName(cred.key);
+                              
+                              const numStr = cred.value;
+                              const hasInScanned = scannedPorts.some(p => String(p.port) === numStr);
+                              if (hasInScanned) {
+                                setSelectedPort(numStr);
+                                setPortCustomMode(false);
+                              } else {
+                                setCustomPortValue(numStr);
+                                setPortCustomMode(true);
+                              }
+                            }} 
+                            className="btn btn-secondary btn-icon" 
+                            style={{ width: "30px", height: "30px" }} 
+                            title="Bearbeiten"
+                          >
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 1 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
+                          </button>
+                          <button onClick={() => handleDeleteCredential(cred.id)} className="btn btn-secondary btn-icon" style={{ width: "30px", height: "30px" }} title="Löschen">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -1758,14 +2109,31 @@ export default function DashboardPage() {
                                     }
                                   </optgroup>
                                 ) : (
-                                  <optgroup label="Zugangsdaten / Keys">
-                                    {registeredCreds.map(cred => (
-                                      <option key={cred.id} value={cred.id}>
-                                        {cred.alias} ({cred.key})
-                                      </option>
-                                    ))
-                                    }
-                                  </optgroup>
+                                  <>
+                                    {req.key.toUpperCase().includes("PORT") ? (
+                                      <optgroup label="System Ports">
+                                        {registeredCreds
+                                          .filter(cred => cred.type === "port" || cred.key === "PORT" || cred.key.includes("PORT"))
+                                          .map(cred => (
+                                            <option key={cred.id} value={cred.id}>
+                                              {cred.alias} ({cred.value})
+                                            </option>
+                                          ))
+                                        }
+                                      </optgroup>
+                                    ) : (
+                                      <optgroup label="Google API & AI Keys">
+                                        {registeredCreds
+                                          .filter(cred => !(cred.type === "port" || cred.key === "PORT" || cred.key.includes("PORT")))
+                                          .map(cred => (
+                                            <option key={cred.id} value={cred.id}>
+                                              {cred.alias} ({cred.key})
+                                            </option>
+                                          ))
+                                        }
+                                      </optgroup>
+                                    )}
+                                  </>
                                 )}
                               </select>
                             </td>
