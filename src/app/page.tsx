@@ -205,6 +205,39 @@ export default function DashboardPage() {
     }
   };
 
+  // Handle template database server change
+  const handleAdminDbTemplateChange = (templateId: string) => {
+    setSelectedAdminDbId(templateId);
+    if (templateId === "custom") {
+      return;
+    }
+    if (templateId === "postgres-default") {
+      setAdminDbType("postgres");
+      setAdminHost("localhost");
+      setAdminPort(5432);
+      setAdminUser("postgres");
+      setAdminPassword("");
+      setAdminDatabase("postgres");
+    } else if (templateId === "mongodb-default") {
+      setAdminDbType("mongodb");
+      setAdminHost("localhost");
+      setAdminPort(27017);
+      setAdminUser("");
+      setAdminPassword("");
+      setAdminDatabase("admin");
+    } else {
+      const found = registeredDbs.find(d => d.id === templateId);
+      if (found) {
+        setAdminDbType(found.type);
+        setAdminHost(found.host);
+        setAdminPort(found.port);
+        setAdminUser(found.user || "");
+        setAdminPassword(found.password || "");
+        setAdminDatabase(found.database || "");
+      }
+    }
+  };
+
   // Provision a new database
   const handleProvisionDatabase = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -558,37 +591,7 @@ export default function DashboardPage() {
     }
   };
 
-  // Synchronize admin credentials when selecting a server template
-  useEffect(() => {
-    if (selectedAdminDbId === "custom") {
-      return;
-    }
-    if (selectedAdminDbId === "postgres-default") {
-      setAdminDbType("postgres");
-      setAdminHost("localhost");
-      setAdminPort(5432);
-      setAdminUser("postgres");
-      setAdminPassword("");
-      setAdminDatabase("postgres");
-    } else if (selectedAdminDbId === "mongodb-default") {
-      setAdminDbType("mongodb");
-      setAdminHost("localhost");
-      setAdminPort(27017);
-      setAdminUser("");
-      setAdminPassword("");
-      setAdminDatabase("admin");
-    } else {
-      const found = registeredDbs.find(d => d.id === selectedAdminDbId);
-      if (found) {
-        setAdminDbType(found.type);
-        setAdminHost(found.host);
-        setAdminPort(found.port);
-        setAdminUser(found.user || "");
-        setAdminPassword(found.password || "");
-        setAdminDatabase(found.database || "");
-      }
-    }
-  }, [selectedAdminDbId, registeredDbs]);
+
 
   useEffect(() => {
     const initializeDashboard = async () => {
@@ -1287,7 +1290,7 @@ export default function DashboardPage() {
                     <label className="input-label">Verbindungsvorlage</label>
                     <select 
                       value={selectedAdminDbId} 
-                      onChange={e => setSelectedAdminDbId(e.target.value)} 
+                      onChange={e => handleAdminDbTemplateChange(e.target.value)} 
                       className={styles.selectField}
                     >
                       <option value="custom">Eigene Serverdaten eingeben...</option>
