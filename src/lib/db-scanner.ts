@@ -16,6 +16,7 @@ export interface DatabaseInfo {
   name: string;
   host: string;
   user: string;
+  password?: string;
   sourceProcess: string;
   status: "online" | "offline";
   sizeBytes: number;
@@ -55,7 +56,7 @@ function isPortOpen(host: string, port: number, timeout = 1500): Promise<boolean
 }
 
 // Helper to mask credentials
-function maskConnectionString(uri: string): { host: string; database: string; user: string; maskedUri: string } {
+function maskConnectionString(uri: string): { host: string; database: string; user: string; password?: string; maskedUri: string } {
   try {
     let cleanUri = uri;
     if (uri.startsWith("postgres://")) {
@@ -72,12 +73,13 @@ function maskConnectionString(uri: string): { host: string; database: string; us
     const host = parsed.host;
     const user = parsed.username || "default";
     const database = parsed.pathname.substring(1) || "default";
+    const password = parsed.password ? decodeURIComponent(parsed.password) : undefined;
     
     const protocol = uri.substring(0, uri.indexOf("://") + 3);
     const authPart = parsed.username ? `${parsed.username}${parsed.password ? ":*****" : ""}@` : "";
     const maskedUri = `${protocol}${authPart}${host}/${database}${parsed.search}`;
     
-    return { host, database, user, maskedUri };
+    return { host, database, user, password, maskedUri };
   } catch {
     console.error("Failed to parse URI:", uri);
     return { host: "unknown", database: "unknown", user: "unknown", maskedUri: "invalid-uri" };
@@ -348,8 +350,8 @@ export async function scanDatabases(): Promise<DatabaseInfo[]> {
       const hostname = parsed.hostname || "localhost";
       const port = parsed.port ? parseInt(parsed.port, 10) : (type === "postgres" ? 5432 : 27017);
       
-      const { host, database, user, maskedUri } = maskConnectionString(uri);
-
+      const { host, database, user, password, maskedUri } = maskConnectionString(uri);
+      
       // Check if host port is listening
       const portOpen = await isPortOpen(hostname, port);
       
@@ -362,6 +364,7 @@ export async function scanDatabases(): Promise<DatabaseInfo[]> {
             name: database,
             host,
             user,
+            password,
             sourceProcess: source,
             status: "offline",
             sizeBytes: 0,
@@ -382,6 +385,7 @@ export async function scanDatabases(): Promise<DatabaseInfo[]> {
               name: stats.name || database,
               host,
               user,
+              password,
               sourceProcess: source,
               status: "online",
               sizeBytes: stats.sizeBytes || 0,
@@ -398,6 +402,7 @@ export async function scanDatabases(): Promise<DatabaseInfo[]> {
               name: stats.name || database,
               host,
               user,
+              password,
               sourceProcess: source,
               status: "online",
               sizeBytes: stats.sizeBytes || 0,
@@ -415,6 +420,7 @@ export async function scanDatabases(): Promise<DatabaseInfo[]> {
           name: database,
           host,
           user,
+          password,
           sourceProcess: source,
           status: "online",
           sizeBytes: 0,

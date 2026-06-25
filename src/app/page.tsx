@@ -20,6 +20,7 @@ interface DatabaseInfo {
   name: string;
   host: string;
   user: string;
+  password?: string;
   sourceProcess: string;
   status: "online" | "offline";
   sizeBytes: number;
@@ -96,6 +97,17 @@ export default function DashboardPage() {
   const [dbDatabase, setDbDatabase] = useState("");
   const [dbSchema, setDbSchema] = useState("public");
   const [editingDbId, setEditingDbId] = useState<string | null>(null);
+
+  // Database form mode & Provisioning states
+  const [dbFormMode, setDbFormMode] = useState<"register" | "create">("register");
+  const [adminDbType, setAdminDbType] = useState<"postgres" | "mongodb">("postgres");
+  const [adminHost, setAdminHost] = useState("localhost");
+  const [adminPort, setAdminPort] = useState(5432);
+  const [adminUser, setAdminUser] = useState("");
+  const [adminPassword, setAdminPassword] = useState("");
+  const [adminDatabase, setAdminDatabase] = useState("");
+  const [selectedAdminDbId, setSelectedAdminDbId] = useState<string>("custom");
+  const [isProvisioningLoading, setIsProvisioningLoading] = useState(false);
 
   // Credential form state
   const [credAlias, setCredAlias] = useState("");
@@ -191,6 +203,101 @@ export default function DashboardPage() {
       console.error(err);
       alert("Fehler beim Speichern der Datenbank.");
     }
+  };
+
+  // Provision a new database
+  const handleProvisionDatabase = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!dbAlias || !dbDatabase || !dbUser || !dbPassword) {
+      alert("Bitte fülle alle Pflichtfelder für die neue Datenbank aus.");
+      return;
+    }
+    setIsProvisioningLoading(true);
+    try {
+      const adminConnection = {
+        type: adminDbType,
+        host: adminHost,
+        port: Number(adminPort),
+        user: adminUser,
+        password: adminPassword,
+        database: adminDatabase || (adminDbType === "postgres" ? "postgres" : "admin")
+      };
+
+      const newDatabase = {
+        alias: dbAlias,
+        database: dbDatabase,
+        user: dbUser,
+        password: dbPassword,
+        schema: adminDbType === "postgres" ? dbSchema : undefined
+      };
+
+      const res = await fetch("/api/manager/resources/provision", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ adminConnection, newDatabase })
+      });
+
+      const data = await res.json();
+      if (res.ok) {
+        setRegisteredDbs(data.databases || []);
+        // Reset fields
+        setDbAlias("");
+        setDbDatabase("");
+        setDbUser("");
+        setDbPassword("");
+        setDbSchema("public");
+        setSelectedAdminDbId("custom");
+        setDbFormMode("register"); // switch back to registration view
+        alert(data.message || "Datenbank erfolgreich erstellt und registriert!");
+        fetchProjects();
+      } else {
+        alert(`Fehler beim Erstellen der Datenbank: ${data.error}`);
+      }
+    } catch (err) {
+      console.error(err);
+      alert("Verbindungsfehler beim Erstellen der Datenbank.");
+    } finally {
+      setIsProvisioningLoading(false);
+    }
+  };
+
+  // Helper to normalise host and check registration
+  const isAlreadyRegistered = (scannedDb: DatabaseInfo) => {
+    return registeredDbs.some(r => {
+      const rHost = r.host === "127.0.0.1" ? "localhost" : r.host.toLowerCase();
+      const sHost = scannedDb.host === "127.0.0.1" ? "localhost" : scannedDb.host.toLowerCase();
+      
+      let scannedHostname = sHost;
+      let scannedPort = scannedDb.type === "postgres" ? 5432 : 27017;
+      if (sHost.includes(":")) {
+        const parts = sHost.split(":");
+        scannedHostname = parts[0];
+        scannedPort = Number(parts[1]);
+      }
+      
+      return rHost === scannedHostname && r.port === scannedPort && r.database === scannedDb.name;
+    });
+  };
+
+  // Pre-fill form from a discovered database
+  const handleRegisterDiscovered = (db: DatabaseInfo) => {
+    setDbFormMode("register");
+    setEditingDbId(null);
+    setDbAlias(`${db.name} (${db.sourceProcess !== "system-default" ? db.sourceProcess : "Lokal"})`);
+    setDbType(db.type === "postgres" ? "postgres" : "mongodb");
+    
+    const hostPart = db.host.includes(":") ? db.host.split(":")[0] : db.host;
+    const portPart = db.host.includes(":") ? Number(db.host.split(":")[1]) : (db.type === "postgres" ? 5432 : 27017);
+    
+    setDbHost(hostPart);
+    setDbPort(portPart);
+    setDbDatabase(db.name);
+    setDbUser(db.user || "");
+    setDbPassword(db.password || "");
+    setDbSchema("public");
+    
+    // Smooth scroll to database form card
+    document.getElementById("database-form-card")?.scrollIntoView({ behavior: "smooth" });
   };
 
   // Delete database
@@ -450,6 +557,38 @@ export default function DashboardPage() {
       console.error("Error during logout:", error);
     }
   };
+
+  // Synchronize admin credentials when selecting a server template
+  useEffect(() => {
+    if (selectedAdminDbId === "custom") {
+      return;
+    }
+    if (selectedAdminDbId === "postgres-default") {
+      setAdminDbType("postgres");
+      setAdminHost("localhost");
+      setAdminPort(5432);
+      setAdminUser("postgres");
+      setAdminPassword("");
+      setAdminDatabase("postgres");
+    } else if (selectedAdminDbId === "mongodb-default") {
+      setAdminDbType("mongodb");
+      setAdminHost("localhost");
+      setAdminPort(27017);
+      setAdminUser("");
+      setAdminPassword("");
+      setAdminDatabase("admin");
+    } else {
+      const found = registeredDbs.find(d => d.id === selectedAdminDbId);
+      if (found) {
+        setAdminDbType(found.type);
+        setAdminHost(found.host);
+        setAdminPort(found.port);
+        setAdminUser(found.user || "");
+        setAdminPassword(found.password || "");
+        setAdminDatabase(found.database || "");
+      }
+    }
+  }, [selectedAdminDbId, registeredDbs]);
 
   useEffect(() => {
     const initializeDashboard = async () => {
@@ -899,136 +1038,7 @@ export default function DashboardPage() {
             )}
           </section>
 
-          {/* Databases Discovery view */}
-          <section style={{ marginTop: "1rem" }}>
-            <div className={styles.sectionHeader}>
-              <h2 className={styles.sectionTitle}>Datenbanken (Auto-Discovery)</h2>
-            </div>
-
-            {isDbsLoading ? (
-              <div className="glass-panel" style={{ padding: "4rem", textAlign: "center" }}>
-                <svg
-                  className="spinner"
-                  width="36"
-                  height="36"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="var(--primary)"
-                  strokeWidth="2.5"
-                >
-                  <circle cx="12" cy="12" r="10" strokeDasharray="40 20"></circle>
-                </svg>
-                <p style={{ marginTop: "1rem", color: "var(--text-secondary)" }}>Datenbanken werden gescannt...</p>
-              </div>
-            ) : databases.length === 0 ? (
-              <div className={`${styles.tableWrapper} glass-panel`}>
-                <div className={styles.emptyState}>
-                  <svg
-                    className={styles.emptyStateIcon}
-                    width="48"
-                    height="48"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.5"
-                  >
-                    <circle cx="12" cy="12" r="10"></circle>
-                    <line x1="8" y1="12" x2="16" y2="12"></line>
-                  </svg>
-                  <p>Keine Datenbanken automatisch erkannt.</p>
-                  <p style={{ fontSize: "0.85rem", color: "var(--text-muted)", maxWidth: "450px", margin: "0 auto" }}>
-                    Der Scanner sucht auf dem System nach aktiven Datenbank-Ports (z. B. 5432, 5435, 27017) und liest Konfigurationen aus lokalen <code>.env</code>-Dateien aus.
-                  </p>
-                </div>
-              </div>
-            ) : (
-              <div className={styles.tableWrapper}>
-                <table className={styles.processTable}>
-                  <thead>
-                    <tr>
-                      <th>Typ</th>
-                      <th>Name / Host</th>
-                      <th>Benutzer</th>
-                      <th>Status</th>
-                      <th>Größe</th>
-                      <th>Statistiken / Details</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {databases.map((db, idx) => (
-                      <tr key={idx}>
-                        <td>
-                          <div
-                            className={`${styles.dbTypeIcon} ${
-                              db.type === "postgres" ? styles.dbTypePostgres : styles.dbTypeMongodb
-                            }`}
-                            title={db.type}
-                          >
-                            {db.type === "postgres" ? "PG" : "MG"}
-                          </div>
-                        </td>
-                        <td>
-                          <div className={styles.processName}>
-                            <span>{db.name}</span>
-                            <span className={styles.pmId}>{db.host}</span>
-                          </div>
-                          <div className={styles.dbMaskedUri} title={db.maskedUri}>
-                            {db.maskedUri}
-                          </div>
-                        </td>
-                        <td className={styles.monoText}>{db.user}</td>
-                        <td>
-                          {db.status === "online" ? (
-                            <span className="badge badge-online">
-                              <span className="pulse-dot pulse-dot-online"></span>Online
-                            </span>
-                          ) : (
-                            <span className="badge badge-stopped" title={db.error}>
-                              <span className="pulse-dot pulse-dot-stopped"></span>Offline
-                            </span>
-                          )}
-                        </td>
-                        <td className={styles.monoText}>
-                          {db.status === "online" ? formatMemory(db.sizeBytes) : "—"}
-                        </td>
-                        <td>
-                          {db.status === "online" ? (
-                            <div style={{ fontSize: "0.85rem", color: "var(--text-secondary)" }}>
-                              {db.type === "postgres" && (
-                                <>
-                                  <div>Tabellen: <strong>{db.tablesCount ?? 0}</strong></div>
-                                  <div>Verbindungen: <strong>{db.connectionCount ?? 0}</strong></div>
-                                </>
-                              )}
-                              {db.type === "mongodb" && (
-                                <>
-                                  <div>Collections: <strong>{db.collectionsCount ?? 0}</strong></div>
-                                  <div>Dokumente: <strong>{db.documentsCount?.toLocaleString() ?? 0}</strong></div>
-                                </>
-                              )}
-                            </div>
-                          ) : (
-                            <span 
-                              style={{ 
-                                fontSize: "0.75rem", 
-                                color: "var(--danger)", 
-                                maxWidth: "200px", 
-                                display: "inline-block", 
-                                wordBreak: "break-word" 
-                              }} 
-                              title={db.error}
-                            >
-                              {db.error || "Verbindungsfehler"}
-                            </span>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </section>
+          {/* Databases Discovery section removed from dashboard (now in Databases & Keys tab) */}
 
           {/* Logs View Panel */}
           {selectedProcess && (
@@ -1101,134 +1111,360 @@ export default function DashboardPage() {
           <h2 className={styles.sectionTitle} style={{ marginBottom: "1rem" }}>Zentrale Datenbanken</h2>
           <div className={styles.settingsGrid} style={{ marginBottom: "3rem" }}>
             {/* Database Form Card */}
-            <div className={`${styles.settingsCard} glass-panel`}>
-              <h3 style={{ fontSize: "1.2rem", fontWeight: 700 }}>
-                {editingDbId ? "Datenbank bearbeiten" : "Datenbank registrieren"}
-              </h3>
-              <form onSubmit={handleSaveDatabase} style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
-                <div className="input-group">
-                  <label className="input-label">Aliasname *</label>
-                  <input 
-                    type="text" 
-                    value={dbAlias} 
-                    onChange={e => setDbAlias(e.target.value)} 
-                    placeholder="z. B. kiSystem Hauptdatenbank" 
-                    className="input-field" 
-                    required 
-                  />
-                </div>
-                
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
+            <div id="database-form-card" className={`${styles.settingsCard} glass-panel`}>
+              {/* Tab-Toggler inside the card header */}
+              <div style={{ display: "flex", gap: "1.5rem", borderBottom: "1px solid var(--border-glass)", marginBottom: "1.5rem", paddingBottom: "0.75rem" }}>
+                <button 
+                  type="button"
+                  onClick={() => { setDbFormMode("register"); setEditingDbId(null); }}
+                  className={`${styles.tabButton} ${dbFormMode === "register" ? styles.tabButtonActive : ""}`}
+                  style={{ 
+                    padding: "0.25rem 0.5rem", 
+                    fontSize: "0.95rem", 
+                    background: "none", 
+                    border: "none", 
+                    cursor: "pointer", 
+                    borderBottom: dbFormMode === "register" ? "2px solid var(--primary)" : "none", 
+                    color: dbFormMode === "register" ? "var(--text-primary)" : "var(--text-secondary)",
+                    fontWeight: dbFormMode === "register" ? 600 : 400
+                  }}
+                >
+                  {editingDbId ? "Datenbank bearbeiten" : "Datenbank registrieren"}
+                </button>
+                {!editingDbId && (
+                  <button 
+                    type="button"
+                    onClick={() => setDbFormMode("create")}
+                    className={`${styles.tabButton} ${dbFormMode === "create" ? styles.tabButtonActive : ""}`}
+                    style={{ 
+                      padding: "0.25rem 0.5rem", 
+                      fontSize: "0.95rem", 
+                      background: "none", 
+                      border: "none", 
+                      cursor: "pointer", 
+                      borderBottom: dbFormMode === "create" ? "2px solid var(--primary)" : "none", 
+                      color: dbFormMode === "create" ? "var(--text-primary)" : "var(--text-secondary)",
+                      fontWeight: dbFormMode === "create" ? 600 : 400
+                    }}
+                  >
+                    Datenbank erstellen
+                  </button>
+                )}
+              </div>
+
+              {dbFormMode === "register" ? (
+                <form onSubmit={handleSaveDatabase} style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
                   <div className="input-group">
-                    <label className="input-label">Typ *</label>
+                    <label className="input-label">Aliasname *</label>
+                    <input 
+                      type="text" 
+                      value={dbAlias} 
+                      onChange={e => setDbAlias(e.target.value)} 
+                      placeholder="z. B. kiSystem Hauptdatenbank" 
+                      className="input-field" 
+                      required 
+                    />
+                  </div>
+                  
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
+                    <div className="input-group">
+                      <label className="input-label">Typ *</label>
+                      <select 
+                        value={dbType} 
+                        onChange={e => {
+                          setDbType(e.target.value as "postgres" | "mongodb");
+                          setDbPort(e.target.value === "postgres" ? 5432 : 27017);
+                        }} 
+                        className={styles.selectField}
+                      >
+                        <option value="postgres">PostgreSQL</option>
+                        <option value="mongodb">MongoDB</option>
+                      </select>
+                    </div>
+                    <div className="input-group">
+                      <label className="input-label">Host *</label>
+                      <input 
+                        type="text" 
+                        value={dbHost} 
+                        onChange={e => setDbHost(e.target.value)} 
+                        className="input-field" 
+                        required 
+                      />
+                    </div>
+                  </div>
+
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
+                    <div className="input-group">
+                      <label className="input-label">Port *</label>
+                      <input 
+                        type="number" 
+                        value={dbPort} 
+                        onChange={e => setDbPort(Number(e.target.value))} 
+                        className="input-field" 
+                        required 
+                      />
+                    </div>
+                    <div className="input-group">
+                      <label className="input-label">Datenbankname *</label>
+                      <input 
+                        type="text" 
+                        value={dbDatabase} 
+                        onChange={e => setDbDatabase(e.target.value)} 
+                        placeholder="z. B. dbname" 
+                        className="input-field" 
+                        required 
+                      />
+                    </div>
+                  </div>
+
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
+                    <div className="input-group">
+                      <label className="input-label">Benutzername</label>
+                      <input 
+                        type="text" 
+                        value={dbUser} 
+                        onChange={e => setDbUser(e.target.value)} 
+                        placeholder="z. B. postgres" 
+                        className="input-field" 
+                      />
+                    </div>
+                    <div className="input-group">
+                      <label className="input-label">Passwort</label>
+                      <input 
+                        type="password" 
+                        value={dbPassword} 
+                        onChange={e => setDbPassword(e.target.value)} 
+                        placeholder="••••••••" 
+                        className="input-field" 
+                      />
+                    </div>
+                  </div>
+
+                  {dbType === "postgres" && (
+                    <div className="input-group">
+                      <label className="input-label">Schema</label>
+                      <input 
+                        type="text" 
+                        value={dbSchema} 
+                        onChange={e => setDbSchema(e.target.value)} 
+                        className="input-field" 
+                      />
+                    </div>
+                  )}
+
+                  <div className={styles.formActions}>
+                    {editingDbId && (
+                      <button 
+                        type="button" 
+                        onClick={() => {
+                          setEditingDbId(null);
+                          setDbAlias("");
+                          setDbDatabase("");
+                          setDbUser("");
+                          setDbPassword("");
+                          setDbType("postgres");
+                          setDbHost("localhost");
+                          setDbPort(5432);
+                          setDbSchema("public");
+                        }} 
+                        className="btn btn-secondary"
+                      >
+                        Abbrechen
+                      </button>
+                    )}
+                    <button type="submit" className="btn btn-primary">
+                      Speichern
+                    </button>
+                  </div>
+                </form>
+              ) : (
+                <form onSubmit={handleProvisionDatabase} style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+                  <h4 style={{ fontSize: "0.9rem", fontWeight: 600, color: "var(--text-secondary)", borderBottom: "1px solid var(--border-glass)", paddingBottom: "0.25rem" }}>
+                    1. Server-Verbindung (Admin)
+                  </h4>
+                  
+                  <div className="input-group">
+                    <label className="input-label">Verbindungsvorlage</label>
                     <select 
-                      value={dbType} 
-                      onChange={e => {
-                        setDbType(e.target.value as "postgres" | "mongodb");
-                        setDbPort(e.target.value === "postgres" ? 5432 : 27017);
-                      }} 
+                      value={selectedAdminDbId} 
+                      onChange={e => setSelectedAdminDbId(e.target.value)} 
                       className={styles.selectField}
                     >
-                      <option value="postgres">PostgreSQL</option>
-                      <option value="mongodb">MongoDB</option>
+                      <option value="custom">Eigene Serverdaten eingeben...</option>
+                      <option value="postgres-default">Standard lokales PostgreSQL (localhost:5432)</option>
+                      <option value="mongodb-default">Standard lokales MongoDB (localhost:27017)</option>
+                      {registeredDbs.map(d => (
+                        <option key={d.id} value={d.id}>
+                          {d.alias} ({d.user}@{d.host}:{d.port})
+                        </option>
+                      ))}
                     </select>
                   </div>
+
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
+                    <div className="input-group">
+                      <label className="input-label">Server-Typ *</label>
+                      <select 
+                        value={adminDbType} 
+                        onChange={e => {
+                          setAdminDbType(e.target.value as "postgres" | "mongodb");
+                          setAdminPort(e.target.value === "postgres" ? 5432 : 27017);
+                        }} 
+                        className={styles.selectField}
+                        disabled={selectedAdminDbId !== "custom"}
+                      >
+                        <option value="postgres">PostgreSQL</option>
+                        <option value="mongodb">MongoDB</option>
+                      </select>
+                    </div>
+                    <div className="input-group">
+                      <label className="input-label">Server Host *</label>
+                      <input 
+                        type="text" 
+                        value={adminHost} 
+                        onChange={e => setAdminHost(e.target.value)} 
+                        className="input-field" 
+                        required 
+                        disabled={selectedAdminDbId !== "custom"}
+                      />
+                    </div>
+                  </div>
+
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
+                    <div className="input-group">
+                      <label className="input-label">Server Port *</label>
+                      <input 
+                        type="number" 
+                        value={adminPort} 
+                        onChange={e => setAdminPort(Number(e.target.value))} 
+                        className="input-field" 
+                        required 
+                        disabled={selectedAdminDbId !== "custom"}
+                      />
+                    </div>
+                    <div className="input-group">
+                      <label className="input-label">Admin-Datenbank *</label>
+                      <input 
+                        type="text" 
+                        value={adminDatabase} 
+                        onChange={e => setAdminDatabase(e.target.value)} 
+                        placeholder={adminDbType === "postgres" ? "postgres" : "admin"}
+                        className="input-field" 
+                        required 
+                        disabled={selectedAdminDbId !== "custom"}
+                      />
+                    </div>
+                  </div>
+
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
+                    <div className="input-group">
+                      <label className="input-label">Admin-Nutzername</label>
+                      <input 
+                        type="text" 
+                        value={adminUser} 
+                        onChange={e => setAdminUser(e.target.value)} 
+                        placeholder={adminDbType === "postgres" ? "postgres" : "admin"} 
+                        className="input-field"
+                        disabled={selectedAdminDbId !== "custom"}
+                      />
+                    </div>
+                    <div className="input-group">
+                      <label className="input-label">Admin-Passwort</label>
+                      <input 
+                        type="password" 
+                        value={adminPassword} 
+                        onChange={e => setAdminPassword(e.target.value)} 
+                        placeholder="••••••••" 
+                        className="input-field"
+                        disabled={selectedAdminDbId !== "custom"}
+                      />
+                    </div>
+                  </div>
+
+                  <h4 style={{ fontSize: "0.9rem", fontWeight: 600, color: "var(--text-secondary)", borderBottom: "1px solid var(--border-glass)", paddingBottom: "0.25rem", marginTop: "1rem" }}>
+                    2. Neue Datenbank & Benutzer
+                  </h4>
+
                   <div className="input-group">
-                    <label className="input-label">Host *</label>
+                    <label className="input-label">Aliasname für Eintrag *</label>
                     <input 
                       type="text" 
-                      value={dbHost} 
-                      onChange={e => setDbHost(e.target.value)} 
+                      value={dbAlias} 
+                      onChange={e => setDbAlias(e.target.value)} 
+                      placeholder="z. B. kiSystem Hauptdatenbank" 
                       className="input-field" 
                       required 
                     />
                   </div>
-                </div>
 
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
-                  <div className="input-group">
-                    <label className="input-label">Port *</label>
-                    <input 
-                      type="number" 
-                      value={dbPort} 
-                      onChange={e => setDbPort(Number(e.target.value))} 
-                      className="input-field" 
-                      required 
-                    />
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
+                    <div className="input-group">
+                      <label className="input-label">Datenbankname *</label>
+                      <input 
+                        type="text" 
+                        value={dbDatabase} 
+                        onChange={e => setDbDatabase(e.target.value)} 
+                        placeholder="z. B. kisystem" 
+                        className="input-field" 
+                        required 
+                      />
+                    </div>
+                    <div className="input-group">
+                      <label className="input-label">Neuer Benutzername *</label>
+                      <input 
+                        type="text" 
+                        value={dbUser} 
+                        onChange={e => setDbUser(e.target.value)} 
+                        placeholder="z. B. app_user" 
+                        className="input-field" 
+                        required
+                      />
+                    </div>
                   </div>
-                  <div className="input-group">
-                    <label className="input-label">Datenbankname *</label>
-                    <input 
-                      type="text" 
-                      value={dbDatabase} 
-                      onChange={e => setDbDatabase(e.target.value)} 
-                      placeholder="z. B. dbname" 
-                      className="input-field" 
-                      required 
-                    />
-                  </div>
-                </div>
 
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
-                  <div className="input-group">
-                    <label className="input-label">Benutzername</label>
-                    <input 
-                      type="text" 
-                      value={dbUser} 
-                      onChange={e => setDbUser(e.target.value)} 
-                      placeholder="z. B. postgres" 
-                      className="input-field" 
-                    />
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
+                    <div className="input-group">
+                      <label className="input-label">Passwort für Benutzer *</label>
+                      <input 
+                        type="password" 
+                        value={dbPassword} 
+                        onChange={e => setDbPassword(e.target.value)} 
+                        placeholder="••••••••" 
+                        className="input-field" 
+                        required
+                      />
+                    </div>
+                    {adminDbType === "postgres" && (
+                      <div className="input-group">
+                        <label className="input-label">Schema</label>
+                        <input 
+                          type="text" 
+                          value={dbSchema} 
+                          onChange={e => setDbSchema(e.target.value)} 
+                          className="input-field" 
+                        />
+                      </div>
+                    )}
                   </div>
-                  <div className="input-group">
-                    <label className="input-label">Passwort</label>
-                    <input 
-                      type="password" 
-                      value={dbPassword} 
-                      onChange={e => setDbPassword(e.target.value)} 
-                      placeholder="••••••••" 
-                      className="input-field" 
-                    />
-                  </div>
-                </div>
 
-                {dbType === "postgres" && (
-                  <div className="input-group">
-                    <label className="input-label">Schema</label>
-                    <input 
-                      type="text" 
-                      value={dbSchema} 
-                      onChange={e => setDbSchema(e.target.value)} 
-                      className="input-field" 
-                    />
-                  </div>
-                )}
-
-                <div className={styles.formActions}>
-                  {editingDbId && (
+                  <div className={styles.formActions} style={{ marginTop: "1rem" }}>
                     <button 
-                      type="button" 
-                      onClick={() => {
-                        setEditingDbId(null);
-                        setDbAlias("");
-                        setDbDatabase("");
-                        setDbUser("");
-                        setDbPassword("");
-                        setDbType("postgres");
-                        setDbHost("localhost");
-                        setDbPort(5432);
-                        setDbSchema("public");
-                      }} 
-                      className="btn btn-secondary"
+                      type="submit" 
+                      className="btn btn-primary"
+                      disabled={isProvisioningLoading}
                     >
-                      Abbrechen
+                      {isProvisioningLoading ? (
+                        <>
+                          <svg className="spinner" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10" strokeDasharray="30 15"></circle></svg>
+                          <span>Erstellt...</span>
+                        </>
+                      ) : (
+                        <span>Datenbank erstellen</span>
+                      )}
                     </button>
-                  )}
-                  <button type="submit" className="btn btn-primary">
-                    Speichern
-                  </button>
-                </div>
-              </form>
+                  </div>
+                </form>
+              )}
             </div>
 
             {/* Database List Card */}
@@ -1264,6 +1500,64 @@ export default function DashboardPage() {
               )}
             </div>
           </div>
+
+          {/* Gefundene Datenbanken (Auto-Discovery) */}
+          {(() => {
+            const unregisteredDbs = databases.filter(d => !isAlreadyRegistered(d));
+            return (
+              <div className="glass-panel" style={{ padding: "1.5rem", marginBottom: "3rem", animation: "fadeIn 0.3s ease-out" }}>
+                <h3 style={{ fontSize: "1.2rem", fontWeight: 700, marginBottom: "1rem", display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                  <span className="pulse-dot pulse-dot-online"></span>
+                  Gefundene Datenbanken auf diesem PC (Auto-Discovery)
+                </h3>
+                <p style={{ color: "var(--text-secondary)", fontSize: "0.9rem", marginBottom: "1.25rem" }}>
+                  Diese Datenbanken wurden automatisch im lokalen System oder in Projektkonfigurationen (.env) gefunden, sind aber noch nicht im ProcessManager registriert.
+                </p>
+
+                {isDbsLoading ? (
+                  <div style={{ textAlign: "center", padding: "1.5rem" }}>
+                    <svg className="spinner" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" strokeWidth="2.5"><circle cx="12" cy="12" r="10" strokeDasharray="30 15"></circle></svg>
+                    <span style={{ marginLeft: "0.5rem", color: "var(--text-muted)", fontSize: "0.9rem" }}>Scanne System...</span>
+                  </div>
+                ) : unregisteredDbs.length === 0 ? (
+                  <p style={{ color: "var(--text-muted)", fontStyle: "italic", fontSize: "0.9rem" }}>
+                    Keine nicht-registrierten Datenbanken im System gefunden.
+                  </p>
+                ) : (
+                  <div className={styles.resourceList}>
+                    {unregisteredDbs.map((db, idx) => (
+                      <div key={`disc-${idx}`} className={styles.resourceItem} style={{ borderLeft: "3px solid var(--primary)" }}>
+                        <div className={styles.resourceDetails}>
+                          <span className={styles.resourceAlias} style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                            {db.name}
+                            <span style={{ fontSize: "0.75rem", padding: "0.1rem 0.4rem", borderRadius: "4px", background: "rgba(255,255,255,0.08)", color: "var(--text-secondary)" }}>
+                              {db.type === "postgres" ? "PostgreSQL" : "MongoDB"}
+                            </span>
+                            <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
+                              (erkannt in: {db.sourceProcess})
+                            </span>
+                          </span>
+                          <span className={styles.resourceSub}>
+                            Host: {db.host} &bull; Benutzer: {db.user || "default"} {db.status === "offline" && <span style={{ color: "var(--danger)" }}> &bull; Offline ({db.error || "Port geschlossen"})</span>}
+                          </span>
+                        </div>
+                        <div>
+                          <button 
+                            type="button"
+                            onClick={() => handleRegisterDiscovered(db)} 
+                            className="btn btn-secondary" 
+                            style={{ padding: "0.4rem 0.8rem", fontSize: "0.85rem" }}
+                          >
+                            Registrieren
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
 
           {/* Credentials Section */}
           <h2 className={styles.sectionTitle} style={{ marginBottom: "1rem" }}>Zentrale Zugangsdaten (API Keys, etc.)</h2>
