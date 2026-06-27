@@ -157,6 +157,15 @@ export default function DashboardPage() {
   const [isBackupLoading, setIsBackupLoading] = useState(false);
   const [isBackupCreating, setIsBackupCreating] = useState(false);
 
+  // User states
+  const [dbUsers, setDbUsers] = useState<{ username: string; cancreatedb: boolean; issuperuser: boolean }[]>([]);
+  const [selectedDbForUsers, setSelectedDbForUsers] = useState<RegisteredDatabase | null>(null);
+  const [isUsersLoading, setIsUsersLoading] = useState(false);
+  const [adminUsername, setAdminUsername] = useState("postgres");
+  const [adminPasswordInput, setAdminPasswordInput] = useState("");
+  const [showAdminAuthForm, setShowAdminAuthForm] = useState(false);
+  const [userActionPending, setUserActionPending] = useState<string | null>(null);
+
   // Trigger Prisma Actions
   const handlePrismaAction = async (projectName: string, action: string, extraArgs: Record<string, string | number | boolean> = {}) => {
     setIsMigrationRunning(prev => ({ ...prev, [projectName]: true }));
@@ -277,6 +286,79 @@ export default function DashboardPage() {
     } catch (err) {
       console.error(err);
       alert("Fehler bei der Verbindung.");
+    }
+  };
+
+  // Fetch DB Users
+  const fetchDbUsers = async (dbId: string) => {
+    setIsUsersLoading(true);
+    try {
+      const res = await fetch("/api/manager/database/ops", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "user-list", dbId })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setDbUsers(data.users || []);
+      } else {
+        const data = await res.json();
+        alert(`Fehler beim Laden der Benutzer: ${data.error}`);
+      }
+    } catch (err) {
+      console.error(err);
+      alert("Fehler beim Abrufen der Benutzerliste.");
+    } finally {
+      setIsUsersLoading(false);
+    }
+  };
+
+  // Toggle CREATEDB Permission
+  const handleToggleCreatedb = async (dbId: string, username: string, currentVal: boolean, useAdminCreds = false) => {
+    setUserActionPending(username);
+    try {
+      const payload: Record<string, string | boolean> = {
+        action: "user-toggle-createdb",
+        dbId,
+        username,
+        enabled: !currentVal
+      };
+
+      if (useAdminCreds) {
+        payload.adminUser = adminUsername;
+        payload.adminPassword = adminPasswordInput;
+      }
+
+      const res = await fetch("/api/manager/database/ops", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+
+      const data = await res.json();
+      if (res.ok) {
+        alert(data.message || "Rechte erfolgreich aktualisiert!");
+        setShowAdminAuthForm(false);
+        setAdminPasswordInput("");
+        fetchDbUsers(dbId);
+      } else {
+        // If permission denied error, show the admin auth override form
+        if (data.error && (data.error.includes("permission denied") || data.error.includes("privilege") || data.error.includes("Must be superuser"))) {
+          if (!useAdminCreds) {
+            setShowAdminAuthForm(true);
+            alert("Fehlende Berechtigungen! Bitte gib unten das Passwort für den Superuser 'postgres' (oder einen anderen Admin) ein, um die Berechtigung zu gewähren.");
+          } else {
+            alert(`Aktion fehlgeschlagen (Admin-Verbindung verweigert): ${data.error}`);
+          }
+        } else {
+          alert(`Fehler: ${data.error}`);
+        }
+      }
+    } catch (err) {
+      console.error(err);
+      alert("Verbindungsfehler beim Aktualisieren der Berechtigungen.");
+    } finally {
+      setUserActionPending(null);
     }
   };
 
@@ -1755,21 +1837,36 @@ export default function DashboardPage() {
                       </div>
                       <div style={{ display: "flex", gap: "0.5rem" }}>
                         {db.type === "postgres" && (
-                          <button 
-                            onClick={() => {
-                              setSelectedDbForBackups(db);
-                              fetchBackups(db.id);
-                            }} 
-                            className="btn btn-secondary btn-icon" 
-                            style={{ width: "30px", height: "30px" }} 
-                            title="Backups verwalten"
-                          >
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                              <ellipse cx="12" cy="5" rx="9" ry="3"></ellipse>
-                              <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path>
-                              <path d="M3 12c0 1.66 4 3 9 3s9-1.34 9-3"></path>
-                            </svg>
-                          </button>
+                          <>
+                            <button 
+                              onClick={() => {
+                                setSelectedDbForBackups(db);
+                                fetchBackups(db.id);
+                              }} 
+                              className="btn btn-secondary btn-icon" 
+                              style={{ width: "30px", height: "30px" }} 
+                              title="Backups verwalten"
+                            >
+                              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <ellipse cx="12" cy="5" rx="9" ry="3"></ellipse>
+                                <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path>
+                                <path d="M3 12c0 1.66 4 3 9 3s9-1.34 9-3"></path>
+                              </svg>
+                            </button>
+                            <button 
+                              onClick={() => {
+                                setSelectedDbForUsers(db);
+                                fetchDbUsers(db.id);
+                              }} 
+                              className="btn btn-secondary btn-icon" 
+                              style={{ width: "30px", height: "30px" }} 
+                              title="Benutzer & Rechte verwalten"
+                            >
+                              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--secondary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"></path>
+                              </svg>
+                            </button>
+                          </>
                         )}
                         <button onClick={() => startEditDb(db)} className="btn btn-secondary btn-icon" style={{ width: "30px", height: "30px" }} title="Bearbeiten">
                           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 1 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
@@ -2559,6 +2656,175 @@ export default function DashboardPage() {
 
             <div style={{ borderTop: "1px solid var(--border-glass)", paddingTop: "1rem", display: "flex", justifyContent: "flex-end" }}>
               <button onClick={() => setSelectedDbForBackups(null)} className="btn btn-secondary" style={{ padding: "0.5rem 1rem" }}>
+                Schließen
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* User Management Modal */}
+      {selectedDbForUsers && (
+        <div style={{
+          position: "fixed",
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: "rgba(0, 0, 0, 0.75)",
+          backdropFilter: "blur(8px)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          zIndex: 9999,
+          animation: "fadeIn 0.2s ease-out"
+        }}>
+          <div className="glass-panel" style={{
+            width: "90%",
+            maxWidth: "600px",
+            padding: "2rem",
+            maxHeight: "85vh",
+            display: "flex",
+            flexDirection: "column",
+            gap: "1.5rem"
+          }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid var(--border-glass)", paddingBottom: "1rem" }}>
+              <div>
+                <h3 style={{ fontSize: "1.25rem", fontWeight: 700, color: "#fff" }}>Benutzer & Rechte für: {selectedDbForUsers.alias}</h3>
+                <span style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>Datenbank: {selectedDbForUsers.database}</span>
+              </div>
+              <button 
+                onClick={() => {
+                  setSelectedDbForUsers(null);
+                  setShowAdminAuthForm(false);
+                  setAdminPasswordInput("");
+                }} 
+                className="btn btn-secondary btn-icon" 
+                style={{ width: "30px", height: "30px", borderRadius: "50%" }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div style={{ flex: 1, overflowY: "auto", minHeight: "150px", maxHeight: "300px" }}>
+              {isUsersLoading ? (
+                <div style={{ textAlign: "center", padding: "2rem" }}>
+                  <svg className="spinner" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" strokeWidth="2.5"><circle cx="12" cy="12" r="10" strokeDasharray="30 15"></circle></svg>
+                </div>
+              ) : dbUsers.length === 0 ? (
+                <p style={{ color: "var(--text-muted)", fontStyle: "italic", textAlign: "center", paddingTop: "2rem" }}>
+                  Keine Benutzer mit Login-Rechten in dieser Datenbank gefunden.
+                </p>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+                  {dbUsers.map(user => (
+                    <div key={user.username} style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      padding: "0.75rem 1rem",
+                      background: "rgba(255,255,255,0.03)",
+                      border: "1px solid var(--border-glass)",
+                      borderRadius: "8px"
+                    }}>
+                      <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem", maxWidth: "60%" }}>
+                        <span style={{ fontSize: "0.9rem", fontWeight: 600, color: "var(--text-primary)" }}>
+                          {user.username}
+                        </span>
+                        <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginTop: "0.1rem" }}>
+                          {user.issuperuser && (
+                            <span style={{ fontSize: "0.7rem", padding: "0.1rem 0.4rem", borderRadius: "4px", background: "rgba(168, 85, 247, 0.15)", color: "var(--secondary)" }}>
+                              Superuser
+                            </span>
+                          )}
+                          <span style={{ 
+                            fontSize: "0.7rem", 
+                            padding: "0.1rem 0.4rem", 
+                            borderRadius: "4px", 
+                            background: user.cancreatedb ? "rgba(16, 185, 129, 0.15)" : "rgba(239, 68, 68, 0.1)", 
+                            color: user.cancreatedb ? "var(--success)" : "var(--danger)" 
+                          }}>
+                            {user.cancreatedb ? "Darf DBs erstellen (CREATEDB)" : "Keine DB-Erstellung"}
+                          </span>
+                        </div>
+                      </div>
+                      
+                      {!user.issuperuser && (
+                        <div>
+                          <button 
+                            onClick={() => handleToggleCreatedb(selectedDbForUsers.id, user.username, user.cancreatedb, showAdminAuthForm)}
+                            disabled={userActionPending === user.username}
+                            className="btn btn-secondary"
+                            style={{ 
+                              padding: "0.35rem 0.75rem", 
+                              fontSize: "0.75rem", 
+                              borderColor: user.cancreatedb ? "var(--danger)" : "var(--success)",
+                              color: user.cancreatedb ? "var(--danger)" : "var(--success)" 
+                            }}
+                          >
+                            {userActionPending === user.username ? (
+                              <svg className="spinner" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10" strokeDasharray="30 15"></circle></svg>
+                            ) : user.cancreatedb ? (
+                              "Entziehen"
+                            ) : (
+                              "Erlauben"
+                            )}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Admin Override Authorization Form */}
+            {showAdminAuthForm && (
+              <div style={{
+                background: "rgba(255,255,255,0.02)",
+                border: "1px solid var(--border-glass)",
+                borderRadius: "8px",
+                padding: "1rem",
+                display: "flex",
+                flexDirection: "column",
+                gap: "0.75rem"
+              }}>
+                <span style={{ fontSize: "0.8rem", color: "var(--text-secondary)", fontWeight: 500 }}>
+                  Admin/Superuser Zugangsdaten zur Bestätigung:
+                </span>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: "0.75rem" }}>
+                  <input 
+                    type="text"
+                    placeholder="postgres"
+                    value={adminUsername}
+                    onChange={e => setAdminUsername(e.target.value)}
+                    className="input-field"
+                    style={{ padding: "0.4rem 0.6rem", fontSize: "0.85rem" }}
+                  />
+                  <input 
+                    type="password"
+                    placeholder="Admin-Passwort (z. B. password123)"
+                    value={adminPasswordInput}
+                    onChange={e => setAdminPasswordInput(e.target.value)}
+                    className="input-field"
+                    style={{ padding: "0.4rem 0.6rem", fontSize: "0.85rem" }}
+                  />
+                </div>
+                <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
+                  Nach Eingabe klicke oben beim jeweiligen Benutzer erneut auf „Erlauben“ oder „Entziehen“, um die Aktion mit Admin-Rechten auszuführen.
+                </span>
+              </div>
+            )}
+
+            <div style={{ borderTop: "1px solid var(--border-glass)", paddingTop: "1rem", display: "flex", justifyContent: "flex-end" }}>
+              <button 
+                onClick={() => {
+                  setSelectedDbForUsers(null);
+                  setShowAdminAuthForm(false);
+                  setAdminPasswordInput("");
+                }} 
+                className="btn btn-secondary" 
+                style={{ padding: "0.5rem 1rem" }}
+              >
                 Schließen
               </button>
             </div>

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
 import { exec } from "child_process";
+import { Client } from "pg";
 import { 
   readStore, 
   getDiscoveredProjects, 
@@ -218,6 +219,80 @@ export async function POST(request: Request) {
       }
 
       return NextResponse.json({ error: "Ungültige Backup-Aktion" }, { status: 400 });
+    }
+
+    // 3. User & Permissions Operations
+    if (action.startsWith("user-")) {
+      if (action === "user-list") {
+        if (!dbId) {
+          return NextResponse.json({ error: "Missing dbId parameter" }, { status: 400 });
+        }
+        const dbConfig = store.databases.find(d => d.id === dbId);
+        if (!dbConfig) {
+          return NextResponse.json({ error: "Datenbank nicht gefunden" }, { status: 404 });
+        }
+        if (dbConfig.type !== "postgres") {
+          return NextResponse.json({ error: "Benutzerverwaltung wird aktuell nur für PostgreSQL unterstützt." }, { status: 400 });
+        }
+
+        const client = new Client({
+          host: dbConfig.host,
+          port: dbConfig.port,
+          user: dbConfig.user,
+          password: dbConfig.password,
+          database: dbConfig.database,
+          connectionTimeoutMillis: 5000,
+        });
+
+        await client.connect();
+        try {
+          const sql = "SELECT rolname as username, rolcreatedb as cancreatedb, rolsup as issuperuser FROM pg_roles WHERE rolcanlogin = true ORDER BY rolname;";
+          const result = await client.query(sql);
+          return NextResponse.json({ success: true, users: result.rows });
+        } finally {
+          await client.end();
+        }
+      }
+
+      if (action === "user-toggle-createdb") {
+        const { username, enabled, adminUser, adminPassword } = body;
+        if (!dbId || !username) {
+          return NextResponse.json({ error: "Missing dbId or username parameter" }, { status: 400 });
+        }
+
+        // Validate username to prevent SQL injection
+        if (!/^[a-zA-Z0-9_\-]+$/.test(username)) {
+          return NextResponse.json({ error: "Ungültiger Benutzername." }, { status: 400 });
+        }
+
+        const dbConfig = store.databases.find(d => d.id === dbId);
+        if (!dbConfig) {
+          return NextResponse.json({ error: "Datenbank nicht gefunden" }, { status: 404 });
+        }
+        if (dbConfig.type !== "postgres") {
+          return NextResponse.json({ error: "Berechtigungen werden aktuell nur für PostgreSQL unterstützt." }, { status: 400 });
+        }
+
+        const client = new Client({
+          host: dbConfig.host,
+          port: dbConfig.port,
+          user: adminUser || dbConfig.user,
+          password: adminPassword !== undefined ? adminPassword : dbConfig.password,
+          database: dbConfig.database,
+          connectionTimeoutMillis: 5000,
+        });
+
+        await client.connect();
+        try {
+          const sql = `ALTER ROLE "${username.replace(/"/g, '""')}" ${enabled ? "CREATEDB" : "NOCREATEDB"};`;
+          await client.query(sql);
+          return NextResponse.json({ success: true, message: `Berechtigung für ${username} erfolgreich aktualisiert.` });
+        } finally {
+          await client.end();
+        }
+      }
+
+      return NextResponse.json({ error: "Ungültige Benutzer-Aktion" }, { status: 400 });
     }
 
     return NextResponse.json({ error: "Ungültige Aktion" }, { status: 400 });
