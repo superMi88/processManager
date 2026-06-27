@@ -148,7 +148,6 @@ export default function DashboardPage() {
   // Migration states
   const [migrationLogs, setMigrationLogs] = useState<string>("");
   const [isMigrationRunning, setIsMigrationRunning] = useState<Record<string, boolean>>({});
-  const [newMigrationName, setNewMigrationName] = useState<Record<string, string>>({});
   const [activeProjectForLogs, setActiveProjectForLogs] = useState<string | null>(null);
 
   // Backup states
@@ -2473,23 +2472,17 @@ export default function DashboardPage() {
 
                       {proj.hasMigrations && (
                         <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginTop: "1rem", borderTop: "1px solid rgba(255,255,255,0.04)", paddingTop: "1rem" }}>
-                          <input 
-                            type="text"
-                            placeholder="z. B. add_fuzzy_time"
-                            value={newMigrationName[proj.name] || ""}
-                            onChange={e => setNewMigrationName(prev => ({ ...prev, [proj.name]: e.target.value }))}
-                            className="input-field"
-                            style={{ maxWidth: "250px", padding: "0.4rem 0.75rem", fontSize: "0.85rem" }}
-                          />
                           <button 
                             onClick={() => {
-                              const name = newMigrationName[proj.name];
-                              if (!name) {
-                                alert("Bitte gib einen Namen für die Migration ein.");
-                                return;
-                              }
-                              handlePrismaAction(proj.name, "prisma-migrate", { migrationName: name });
-                              setNewMigrationName(prev => ({ ...prev, [proj.name]: "" }));
+                              const now = new Date();
+                              const timestamp = now.getUTCFullYear().toString().padStart(4, "0") +
+                                (now.getUTCMonth() + 1).toString().padStart(2, "0") +
+                                now.getUTCDate().toString().padStart(2, "0") +
+                                now.getUTCHours().toString().padStart(2, "0") +
+                                now.getUTCMinutes().toString().padStart(2, "0") +
+                                now.getUTCSeconds().toString().padStart(2, "0");
+                              const autoName = `auto_migration_${timestamp}`;
+                              handlePrismaAction(proj.name, "prisma-migrate", { migrationName: autoName });
                             }}
                             disabled={isMigrationRunning[proj.name]}
                             className="btn btn-primary"
