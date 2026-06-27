@@ -32,16 +32,22 @@ interface DatabaseInfo {
   error?: string;
 }
 
+interface DatabaseUser {
+  id: string;
+  username: string;
+  password?: string;
+  alias?: string;
+}
+
 interface RegisteredDatabase {
   id: string;
   alias: string;
   type: "postgres" | "mongodb";
   host: string;
   port: number;
-  user: string;
-  password?: string;
   database: string;
   schema?: string;
+  users: DatabaseUser[];
 }
 
 interface RegisteredCredential {
@@ -124,6 +130,8 @@ export default function DashboardPage() {
   const [dbPort, setDbPort] = useState(5432);
   const [dbUser, setDbUser] = useState("");
   const [dbPassword, setDbPassword] = useState("");
+  const [dbMigrationUser, setDbMigrationUser] = useState("");
+  const [dbMigrationPassword, setDbMigrationPassword] = useState("");
   const [dbDatabase, setDbDatabase] = useState("");
   const [dbSchema, setDbSchema] = useState("public");
   const [editingDbId, setEditingDbId] = useState<string | null>(null);
@@ -518,16 +526,22 @@ export default function DashboardPage() {
       return;
     }
     
+    const users = [
+      { id: "u-default", username: dbUser, password: dbPassword, alias: "Anwendungs-Benutzer" }
+    ];
+    if (dbMigrationUser) {
+      users.push({ id: "u-migration", username: dbMigrationUser, password: dbMigrationPassword, alias: "Migrations-Benutzer" });
+    }
+
     const dbData = {
       id: editingDbId || undefined,
       alias: dbAlias,
       type: dbType,
       host: dbHost,
       port: Number(dbPort),
-      user: dbUser,
-      password: dbPassword,
       database: dbDatabase,
-      schema: dbType === "postgres" ? dbSchema : undefined
+      schema: dbType === "postgres" ? dbSchema : undefined,
+      users
     };
 
     try {
@@ -545,6 +559,8 @@ export default function DashboardPage() {
         setDbPort(5432);
         setDbUser("");
         setDbPassword("");
+        setDbMigrationUser("");
+        setDbMigrationPassword("");
         setDbDatabase("");
         setDbSchema("public");
         setEditingDbId(null);
@@ -586,8 +602,9 @@ export default function DashboardPage() {
         setAdminDbType(found.type);
         setAdminHost(found.host);
         setAdminPort(found.port);
-        setAdminUser(found.user || "");
-        setAdminPassword(found.password || "");
+        const appUser = found.users?.find(u => u.id === "u-default") || found.users?.[0];
+        setAdminUser(appUser?.username || "");
+        setAdminPassword(appUser?.password || "");
         setAdminDatabase(found.database || "");
       }
     }
@@ -733,15 +750,21 @@ export default function DashboardPage() {
     }
   };
 
-  // Edit form helpers
   const startEditDb = (db: RegisteredDatabase) => {
     setEditingDbId(db.id);
     setDbAlias(db.alias);
     setDbType(db.type);
     setDbHost(db.host);
     setDbPort(db.port);
-    setDbUser(db.user);
-    setDbPassword(db.password || "");
+    
+    const appUser = db.users?.find(u => u.id === "u-default") || db.users?.[0];
+    const migUser = db.users?.find(u => u.id === "u-migration") || db.users?.[1];
+    
+    setDbUser(appUser?.username || "");
+    setDbPassword(appUser?.password || "");
+    setDbMigrationUser(migUser?.username || "");
+    setDbMigrationPassword(migUser?.password || "");
+    
     setDbDatabase(db.database);
     setDbSchema(db.schema || "public");
   };
@@ -1567,17 +1590,18 @@ export default function DashboardPage() {
 
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
                     <div className="input-group">
-                      <label className="input-label">Benutzername</label>
+                      <label className="input-label">Anwendungs-Benutzername *</label>
                       <input 
                         type="text" 
                         value={dbUser} 
                         onChange={e => setDbUser(e.target.value)} 
-                        placeholder="z. B. postgres" 
+                        placeholder="z. B. app_user" 
                         className="input-field" 
+                        required
                       />
                     </div>
                     <div className="input-group">
-                      <label className="input-label">Passwort</label>
+                      <label className="input-label">Anwendungs-Passwort</label>
                       <input 
                         type="password" 
                         value={dbPassword} 
@@ -1587,6 +1611,31 @@ export default function DashboardPage() {
                       />
                     </div>
                   </div>
+
+                  {dbType === "postgres" && (
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
+                      <div className="input-group">
+                        <label className="input-label">Migrations-Benutzer (Superuser) [Optional]</label>
+                        <input 
+                          type="text" 
+                          value={dbMigrationUser} 
+                          onChange={e => setDbMigrationUser(e.target.value)} 
+                          placeholder="z. B. postgres" 
+                          className="input-field" 
+                        />
+                      </div>
+                      <div className="input-group">
+                        <label className="input-label">Migrations-Passwort [Optional]</label>
+                        <input 
+                          type="password" 
+                          value={dbMigrationPassword} 
+                          onChange={e => setDbMigrationPassword(e.target.value)} 
+                          placeholder="••••••••" 
+                          className="input-field" 
+                        />
+                      </div>
+                    </div>
+                  )}
 
                   {dbType === "postgres" && (
                     <div className="input-group">
@@ -1643,7 +1692,7 @@ export default function DashboardPage() {
                       <option value="mongodb-default">Standard lokales MongoDB (localhost:27017)</option>
                       {registeredDbs.map(d => (
                         <option key={d.id} value={d.id}>
-                          {d.alias} ({d.user}@{d.host}:{d.port})
+                          {d.alias} ({d.users?.[0]?.username || "unknown"}@{d.host}:{d.port})
                         </option>
                       ))}
                     </select>
@@ -1831,7 +1880,7 @@ export default function DashboardPage() {
                       <div className={styles.resourceDetails}>
                         <span className={styles.resourceAlias}>{db.alias}</span>
                         <span className={styles.resourceSub}>
-                          {db.type.toUpperCase()} &bull; {db.user || "default"}@{db.host}:{db.port}/{db.database}
+                          {db.type.toUpperCase()} &bull; {db.users?.map(u => u.username).join(", ") || "default"}@{db.host}:{db.port}/{db.database}
                         </span>
                       </div>
                       <div style={{ display: "flex", gap: "0.5rem" }}>
@@ -2355,51 +2404,101 @@ export default function DashboardPage() {
                               <span className={styles.mappingDesc}>{req.description || "Keine Beschreibung hinterlegt"}</span>
                             </td>
                             <td>
-                              <select 
-                                value={currentVal}
-                                onChange={e => handleLinkChange(proj.name, req.key, e.target.value)}
-                                className={styles.selectField}
-                              >
-                                <option value="">-- Nicht verknüpft (Leerwert) --</option>
-                                {req.type === "database" ? (
-                                  <optgroup label="Datenbanken (Postgres & MongoDB)">
-                                    {registeredDbs
-                                      .filter(db => !req.dbType || db.type === req.dbType)
-                                      .map(db => (
-                                        <option key={db.id} value={db.id}>
-                                          {db.alias} ({db.type})
-                                        </option>
-                                      ))
-                                    }
-                                  </optgroup>
-                                ) : (
-                                  <>
-                                    {req.key.toUpperCase().includes("PORT") ? (
-                                      <optgroup label="System Ports">
-                                        {registeredCreds
-                                          .filter(cred => cred.type === "port" || cred.key === "PORT" || cred.key.includes("PORT"))
-                                          .map(cred => (
-                                            <option key={cred.id} value={cred.id}>
-                                              {cred.alias} ({cred.value})
-                                            </option>
-                                          ))
-                                        }
-                                      </optgroup>
-                                    ) : (
-                                      <optgroup label="Google API & AI Keys">
-                                        {registeredCreds
-                                          .filter(cred => !(cred.type === "port" || cred.key === "PORT" || cred.key.includes("PORT")))
-                                          .map(cred => (
-                                            <option key={cred.id} value={cred.id}>
-                                              {cred.alias} ({cred.key})
-                                            </option>
-                                          ))
-                                        }
-                                      </optgroup>
-                                    )}
-                                  </>
+                              <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+                                <select 
+                                  value={currentVal}
+                                  onChange={e => handleLinkChange(proj.name, req.key, e.target.value)}
+                                  className={styles.selectField}
+                                >
+                                  <option value="">-- Nicht verknüpft (Leerwert) --</option>
+                                  {req.type === "database" ? (
+                                    <optgroup label="Datenbanken (Postgres & MongoDB)">
+                                      {registeredDbs
+                                        .filter(db => !req.dbType || db.type === req.dbType)
+                                        .map(db => (
+                                          <option key={db.id} value={db.id}>
+                                            {db.alias} ({db.type})
+                                          </option>
+                                        ))
+                                      }
+                                    </optgroup>
+                                  ) : (
+                                    <>
+                                      {req.key.toUpperCase().includes("PORT") ? (
+                                        <optgroup label="System Ports">
+                                          {registeredCreds
+                                            .filter(cred => cred.type === "port" || cred.key === "PORT" || cred.key.includes("PORT"))
+                                            .map(cred => (
+                                              <option key={cred.id} value={cred.id}>
+                                                {cred.alias} ({cred.value})
+                                              </option>
+                                            ))
+                                          }
+                                        </optgroup>
+                                      ) : (
+                                        <optgroup label="Google API & AI Keys">
+                                          {registeredCreds
+                                            .filter(cred => !(cred.type === "port" || cred.key === "PORT" || cred.key.includes("PORT")))
+                                            .map(cred => (
+                                              <option key={cred.id} value={cred.id}>
+                                                {cred.alias} ({cred.key})
+                                              </option>
+                                            ))
+                                          }
+                                        </optgroup>
+                                      )}
+                                    </>
+                                  )}
+                                </select>
+
+                                {req.type === "database" && currentVal && (
+                                  (() => {
+                                    const selectedDb = registeredDbs.find(d => d.id === currentVal);
+                                    if (!selectedDb) return null;
+                                    
+                                    const selectedAppUserId = (pendingLinks[proj.name] || {})[`${req.key}_USER`] || "";
+                                    const selectedMigUserId = (pendingLinks[proj.name] || {})[`${req.key}_MIGRATION_USER`] || "";
+
+                                    return (
+                                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.5rem", background: "rgba(255,255,255,0.02)", padding: "0.5rem", borderRadius: "6px", border: "1px solid var(--border-glass)" }}>
+                                        <div className="input-group" style={{ marginBottom: 0 }}>
+                                          <label className="input-label" style={{ fontSize: "0.7rem", color: "var(--text-secondary)", marginBottom: "0.15rem" }}>App-User (.env)</label>
+                                          <select
+                                            value={selectedAppUserId}
+                                            onChange={e => handleLinkChange(proj.name, `${req.key}_USER`, e.target.value)}
+                                            className={styles.selectField}
+                                            style={{ fontSize: "0.75rem", padding: "0.25rem", height: "auto" }}
+                                          >
+                                            <option value="">Standard</option>
+                                            {selectedDb.users?.map(u => (
+                                              <option key={u.id} value={u.id}>
+                                                {u.username} ({u.alias || "User"})
+                                              </option>
+                                            ))}
+                                          </select>
+                                        </div>
+
+                                        <div className="input-group" style={{ marginBottom: 0 }}>
+                                          <label className="input-label" style={{ fontSize: "0.7rem", color: "var(--text-secondary)", marginBottom: "0.15rem" }}>Migration-User (CLI)</label>
+                                          <select
+                                            value={selectedMigUserId}
+                                            onChange={e => handleLinkChange(proj.name, `${req.key}_MIGRATION_USER`, e.target.value)}
+                                            className={styles.selectField}
+                                            style={{ fontSize: "0.75rem", padding: "0.25rem", height: "auto" }}
+                                          >
+                                            <option value="">Standard</option>
+                                            {selectedDb.users?.map(u => (
+                                              <option key={u.id} value={u.id}>
+                                                {u.username} ({u.alias || "User"})
+                                              </option>
+                                            ))}
+                                          </select>
+                                        </div>
+                                      </div>
+                                    );
+                                  })()
                                 )}
-                              </select>
+                              </div>
                             </td>
                           </tr>
                         );

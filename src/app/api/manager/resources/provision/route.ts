@@ -138,10 +138,16 @@ export async function POST(request: Request) {
       type,
       host,
       port: Number(port),
-      user: newUser,
-      password: newPassword,
       database: newDb,
-      schema: type === "postgres" ? (newSchema || "public") : undefined
+      schema: type === "postgres" ? (newSchema || "public") : undefined,
+      users: [
+        {
+          id: "u-default",
+          username: newUser,
+          password: newPassword,
+          alias: "Standard-Benutzer"
+        }
+      ]
     };
 
     store.databases.push(newDbConfig);

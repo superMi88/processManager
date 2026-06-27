@@ -2,16 +2,22 @@ import fs from "fs";
 import path from "path";
 import { restartProcess } from "./pm2";
 
+export interface DatabaseUser {
+  id: string;
+  username: string;
+  password?: string;
+  alias?: string;
+}
+
 export interface DatabaseConfig {
   id: string;
   alias: string;
   type: "postgres" | "mongodb";
   host: string;
   port: number;
-  user: string;
-  password?: string;
   database: string;
   schema?: string;
+  users: DatabaseUser[];
 }
 
 export interface CredentialConfig {
@@ -47,7 +53,32 @@ export function readStore(): ResourceStore {
   try {
     if (fs.existsSync(STORE_PATH)) {
       const content = fs.readFileSync(STORE_PATH, "utf-8");
-      return JSON.parse(content);
+      const store = JSON.parse(content);
+      
+      // Auto-migrate databases to support users array
+      if (store.databases && Array.isArray(store.databases)) {
+        let migrated = false;
+        store.databases = store.databases.map((db: DatabaseConfig & { user?: string; password?: string }) => {
+          if (!db.users || !Array.isArray(db.users)) {
+            db.users = [
+              {
+                id: "u-default",
+                username: db.user || "postgres",
+                password: db.password || "",
+                alias: "Standard-Benutzer"
+              }
+            ];
+            delete db.user;
+            delete db.password;
+            migrated = true;
+          }
+          return db;
+        });
+        if (migrated) {
+          fs.writeFileSync(STORE_PATH, JSON.stringify(store, null, 2), "utf-8");
+        }
+      }
+      return store;
     }
   } catch (error) {
     console.error("Failed to read resources store:", error);
@@ -138,8 +169,9 @@ export function getDiscoveredProjects(): {
 }
 
 // Build connection URL for database
-export function buildDatabaseUrl(db: DatabaseConfig): string {
-  const userPass = db.user ? `${db.user}:${db.password || ""}@` : "";
+export function buildDatabaseUrl(db: DatabaseConfig, userObj?: DatabaseUser): string {
+  const user = userObj || db.users?.[0];
+  const userPass = user ? `${user.username}:${user.password || ""}@` : "";
   if (db.type === "postgres") {
     const schema = db.schema ? `?schema=${db.schema}` : "";
     return `postgresql://${userPass}${db.host}:${db.port}/${db.database}${schema}`;
@@ -169,7 +201,9 @@ export function generateEnvContent(projectName: string, declaration: ProjectDecl
       if (req.type === "database") {
         const db = store.databases.find(d => d.id === resourceId);
         if (db) {
-          value = buildDatabaseUrl(db);
+          const selectedUserId = projectLinks[`${req.key}_USER`];
+          const userObj = db.users?.find(u => u.id === selectedUserId) || db.users?.[0];
+          value = buildDatabaseUrl(db, userObj);
         }
       } else {
         const cred = store.credentials.find(c => c.id === resourceId);

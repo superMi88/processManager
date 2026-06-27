@@ -1,7 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { exec, execSync } from "child_process";
-import { DatabaseConfig } from "./resource-store";
+import { DatabaseConfig, DatabaseUser } from "./resource-store";
 
 export interface BackupFileInfo {
   filename: string;
@@ -38,7 +38,7 @@ function getPgToolPath(tool: "pg_dump" | "pg_restore"): string {
 }
 
 // Backup database
-export function backupDatabase(db: DatabaseConfig): Promise<string> {
+export function backupDatabase(db: DatabaseConfig, userObj?: DatabaseUser): Promise<string> {
   return new Promise((resolve, reject) => {
     if (db.type !== "postgres") {
       return reject(new Error("Backups werden aktuell nur für PostgreSQL unterstützt."));
@@ -52,10 +52,14 @@ export function backupDatabase(db: DatabaseConfig): Promise<string> {
     const filename = `backup_${db.id}_${db.database}_${timestamp}.dump`;
     const backupPath = path.join(BACKUPS_DIR, filename);
 
-    const pgDump = getPgToolPath("pg_dump");
-    const cmd = `${pgDump} -h ${db.host} -p ${db.port} -U ${db.user} -F c -b -v -f "${backupPath}" ${db.database}`;
+    const user = userObj || db.users?.[0];
+    const username = user?.username || "postgres";
+    const password = user?.password || "";
 
-    const env = { ...process.env, PGPASSWORD: db.password || "" };
+    const pgDump = getPgToolPath("pg_dump");
+    const cmd = `${pgDump} -h ${db.host} -p ${db.port} -U ${username} -F c -b -v -f "${backupPath}" ${db.database}`;
+
+    const env = { ...process.env, PGPASSWORD: password };
 
     exec(cmd, { env }, (error, stdout, stderr) => {
       if (error) {
@@ -72,7 +76,7 @@ export function backupDatabase(db: DatabaseConfig): Promise<string> {
 }
 
 // Restore database
-export function restoreDatabase(db: DatabaseConfig, filename: string): Promise<void> {
+export function restoreDatabase(db: DatabaseConfig, filename: string, userObj?: DatabaseUser): Promise<void> {
   return new Promise((resolve, reject) => {
     if (db.type !== "postgres") {
       return reject(new Error("Restore wird aktuell nur für PostgreSQL unterstützt."));
@@ -83,13 +87,17 @@ export function restoreDatabase(db: DatabaseConfig, filename: string): Promise<v
       return reject(new Error(`Backup-Datei '${filename}' wurde nicht gefunden.`));
     }
 
+    const user = userObj || db.users?.[0];
+    const username = user?.username || "postgres";
+    const password = user?.password || "";
+
     const pgRestore = getPgToolPath("pg_restore");
     // --clean drops database objects before recreating them.
     // --no-owner avoids restore errors regarding database owner mismatches.
     // --no-privileges avoids privileges errors.
-    const cmd = `${pgRestore} -h ${db.host} -p ${db.port} -U ${db.user} -d ${db.database} --clean --no-owner --no-privileges "${backupPath}"`;
+    const cmd = `${pgRestore} -h ${db.host} -p ${db.port} -U ${username} -d ${db.database} --clean --no-owner --no-privileges "${backupPath}"`;
 
-    const env = { ...process.env, PGPASSWORD: db.password || "" };
+    const env = { ...process.env, PGPASSWORD: password };
 
     exec(cmd, { env }, (error, stdout, stderr) => {
       if (error) {
