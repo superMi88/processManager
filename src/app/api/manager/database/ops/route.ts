@@ -243,10 +243,9 @@ export async function POST(request: Request) {
           database: dbConfig.database,
           connectionTimeoutMillis: 5000,
         });
-
         await client.connect();
         try {
-          const sql = "SELECT rolname as username, rolcreatedb as cancreatedb, rolsup as issuperuser FROM pg_roles WHERE rolcanlogin = true ORDER BY rolname;";
+          const sql = "SELECT rolname as username, rolcreatedb as cancreatedb, rolsuper as issuperuser FROM pg_roles WHERE rolcanlogin = true ORDER BY rolname;";
           const result = await client.query(sql);
           return NextResponse.json({ success: true, users: result.rows });
         } finally {
