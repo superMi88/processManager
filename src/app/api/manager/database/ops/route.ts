@@ -29,6 +29,19 @@ function runCommand(cmd: string, cwd: string, env: Record<string, string>): Prom
   });
 }
 
+function runCommandRaw(cmd: string, cwd: string, env: Record<string, string>): Promise<{ success: boolean; stdout: string; stderr: string }> {
+  return new Promise((resolve) => {
+    const fullEnv = { ...process.env, ...env };
+    exec(cmd, { cwd, env: fullEnv }, (error, stdout, stderr) => {
+      resolve({
+        success: !error,
+        stdout: stdout || "",
+        stderr: stderr || ""
+      });
+    });
+  });
+}
+
 export async function POST(request: Request) {
   try {
     const body = await request.json();
@@ -109,41 +122,39 @@ export async function POST(request: Request) {
         try {
           const baselineName = "initial_migration";
           
-          // Step 1: Create the migration files (without applying to the DB)
-          const createCmd = `npx prisma migrate dev --name ${baselineName} --create-only`;
-          const createRes = await runCommand(createCmd, projectPath, envVars);
-          if (!createRes.success) {
+          // Step 1: Generate migration SQL using "prisma migrate diff" (fully non-interactive)
+          const diffCmd = `npx prisma migrate diff --from-empty --to-schema-datamodel prisma/schema.prisma --script`;
+          const diffRes = await runCommandRaw(diffCmd, projectPath, envVars);
+          if (!diffRes.success) {
             return NextResponse.json({
               success: false,
-              output: `Baseline-Erstellung fehlgeschlagen.\n\n${createRes.output}`
+              output: `Erstellung der SQL-Migration fehlgeschlagen.\n\n--- STDOUT ---\n${diffRes.stdout}\n\n--- STDERR ---\n${diffRes.stderr}`
             });
           }
 
-          // Step 2: Find the exact folder name of the newly created migration
+          // Step 2: Create directory and write migration.sql
+          const now = new Date();
+          const timestamp = now.getUTCFullYear().toString().padStart(4, "0") +
+            (now.getUTCMonth() + 1).toString().padStart(2, "0") +
+            now.getUTCDate().toString().padStart(2, "0") +
+            now.getUTCHours().toString().padStart(2, "0") +
+            now.getUTCMinutes().toString().padStart(2, "0") +
+            now.getUTCSeconds().toString().padStart(2, "0");
+          
+          const folderName = `${timestamp}_${baselineName}`;
           const migrationsDir = path.join(projectPath, "prisma", "migrations");
-          if (!fs.existsSync(migrationsDir)) {
-            return NextResponse.json({
-              success: false,
-              output: `Fehler: Migrationsverzeichnis '${migrationsDir}' wurde nicht erstellt.`
-            });
-          }
+          const migrationFolder = path.join(migrationsDir, folderName);
+          
+          fs.mkdirSync(migrationFolder, { recursive: true });
+          fs.writeFileSync(path.join(migrationFolder, "migration.sql"), diffRes.stdout, "utf-8");
 
-          const files = fs.readdirSync(migrationsDir);
-          const folderName = files.find(f => f.endsWith(`_${baselineName}`) && fs.statSync(path.join(migrationsDir, f)).isDirectory());
-          if (!folderName) {
-            return NextResponse.json({
-              success: false,
-              output: `Fehler: Die erstellte Migrationsdatei für '${baselineName}' konnte nicht gefunden werden.`
-            });
-          }
-
-          // Step 3: Resolve the migration (mark it as applied)
+          // Step 3: Resolve the migration (mark it as applied in the database)
           const resolveCmd = `npx prisma migrate resolve --applied ${folderName}`;
           const resolveRes = await runCommand(resolveCmd, projectPath, envVars);
           
           return NextResponse.json({
             success: resolveRes.success,
-            output: `Step 1 (Migration erstellen):\n${createRes.output}\n\nStep 2 (Ordner erkannt: ${folderName})\n\nStep 3 (Resolve --applied):\n${resolveRes.output}`
+            output: `Step 1: SQL-Migration erfolgreich generiert.\nStep 2: Migration-Datei erstellt in: prisma/migrations/${folderName}/migration.sql\n\nStep 3 (Resolve --applied):\n${resolveRes.output}`
           });
         } catch (baselineErr) {
           return NextResponse.json({
