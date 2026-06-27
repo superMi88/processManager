@@ -1,6 +1,6 @@
 import fs from "fs";
 import path from "path";
-import { exec } from "child_process";
+import { exec, execSync } from "child_process";
 import { DatabaseConfig } from "./resource-store";
 
 export interface BackupFileInfo {
@@ -17,7 +17,6 @@ const BACKUPS_DIR = path.resolve(process.cwd(), "backups");
 // Locate pg_dump / pg_restore
 function getPgToolPath(tool: "pg_dump" | "pg_restore"): string {
   try {
-    const { execSync } = require("child_process");
     execSync(`where ${tool}`, { stdio: "ignore" });
     return tool;
   } catch {
@@ -121,8 +120,8 @@ export async function listBackups(dbId?: string): Promise<BackupFileInfo[]> {
           // E.g. backup_db-kisystem_kisystem_2026-06-27_04-53-00.dump
           const parts = file.slice(7, -5).split("_");
           
-          const timePart = parts.pop() || "";
-          const datePart = parts.pop() || "";
+          parts.pop(); // remove time part
+          parts.pop(); // remove date part
           const dbname = parts.pop() || "";
           const fileDbId = parts.join("_");
 

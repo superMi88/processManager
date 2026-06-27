@@ -59,6 +59,15 @@ interface ProjectRequirement {
   description?: string;
 }
 
+interface BackupFileInfo {
+  filename: string;
+  sizeBytes: number;
+  createdAt: string;
+  dbId: string;
+  database: string;
+  path: string;
+}
+
 interface DiscoveredProject {
   name: string;
   path: string;
@@ -143,13 +152,13 @@ export default function DashboardPage() {
   const [activeProjectForLogs, setActiveProjectForLogs] = useState<string | null>(null);
 
   // Backup states
-  const [backups, setBackups] = useState<any[]>([]);
+  const [backups, setBackups] = useState<BackupFileInfo[]>([]);
   const [selectedDbForBackups, setSelectedDbForBackups] = useState<RegisteredDatabase | null>(null);
   const [isBackupLoading, setIsBackupLoading] = useState(false);
   const [isBackupCreating, setIsBackupCreating] = useState(false);
 
   // Trigger Prisma Actions
-  const handlePrismaAction = async (projectName: string, action: string, extraArgs: Record<string, any> = {}) => {
+  const handlePrismaAction = async (projectName: string, action: string, extraArgs: Record<string, string | number | boolean> = {}) => {
     setIsMigrationRunning(prev => ({ ...prev, [projectName]: true }));
     setMigrationLogs("Führe Befehl aus... Bitte warten...\n");
     setActiveProjectForLogs(projectName);
@@ -216,6 +225,7 @@ export default function DashboardPage() {
         alert(`Fehler beim Erstellen des Backups: ${data.error}`);
       }
     } catch (err) {
+      console.error(err);
       alert("Fehler bei der Verbindung.");
     } finally {
       setIsBackupCreating(false);
@@ -240,6 +250,7 @@ export default function DashboardPage() {
         alert(`Fehler beim Wiederherstellen: ${data.error}`);
       }
     } catch (err) {
+      console.error(err);
       alert("Fehler bei der Verbindung.");
     } finally {
       setIsBackupLoading(false);
@@ -264,6 +275,7 @@ export default function DashboardPage() {
         alert(`Fehler beim Löschen: ${data.error}`);
       }
     } catch (err) {
+      console.error(err);
       alert("Fehler bei der Verbindung.");
     }
   };
