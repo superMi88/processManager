@@ -71,8 +71,18 @@ export function writeStore(store: ResourceStore): boolean {
 }
 
 // Scan sibling folders for process-manager.json
-export function getDiscoveredProjects(): { projectPath: string; declaration: ProjectDeclaration }[] {
-  const discovered: { projectPath: string; declaration: ProjectDeclaration }[] = [];
+export function getDiscoveredProjects(): { 
+  projectPath: string; 
+  declaration: ProjectDeclaration; 
+  hasPrisma: boolean; 
+  hasMigrations: boolean; 
+}[] {
+  const discovered: { 
+    projectPath: string; 
+    declaration: ProjectDeclaration; 
+    hasPrisma: boolean; 
+    hasMigrations: boolean; 
+  }[] = [];
   const parentDir = path.resolve(process.cwd(), "..");
   
   try {
@@ -88,7 +98,30 @@ export function getDiscoveredProjects(): { projectPath: string; declaration: Pro
               const content = fs.readFileSync(reqPath, "utf-8");
               const declaration = JSON.parse(content) as ProjectDeclaration;
               if (declaration && declaration.name) {
-                discovered.push({ projectPath, declaration });
+                // Check if project uses Prisma
+                const prismaSchemaPath = path.join(projectPath, "prisma", "schema.prisma");
+                const migrationsPath = path.join(projectPath, "prisma", "migrations");
+                const hasPrisma = fs.existsSync(prismaSchemaPath);
+                let hasMigrations = false;
+
+                if (hasPrisma && fs.existsSync(migrationsPath)) {
+                  try {
+                    const migrationDirs = fs.readdirSync(migrationsPath);
+                    hasMigrations = migrationDirs.some(file => {
+                      const fullPath = path.join(migrationsPath, file);
+                      return fs.statSync(fullPath).isDirectory();
+                    });
+                  } catch {
+                    hasMigrations = false;
+                  }
+                }
+
+                discovered.push({ 
+                  projectPath, 
+                  declaration, 
+                  hasPrisma, 
+                  hasMigrations 
+                });
               }
             }
           }

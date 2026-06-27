@@ -64,6 +64,8 @@ interface DiscoveredProject {
   path: string;
   requirements: ProjectRequirement[];
   links: Record<string, string>;
+  hasPrisma?: boolean;
+  hasMigrations?: boolean;
 }
 
 
@@ -133,6 +135,138 @@ export default function DashboardPage() {
   // Project mapping changes state (projectName -> envKey -> resourceId)
   const [pendingLinks, setPendingLinks] = useState<Record<string, Record<string, string>>>({});
   const [isSavingProject, setIsSavingProject] = useState<Record<string, boolean>>({});
+
+  // Migration states
+  const [migrationLogs, setMigrationLogs] = useState<string>("");
+  const [isMigrationRunning, setIsMigrationRunning] = useState<Record<string, boolean>>({});
+  const [newMigrationName, setNewMigrationName] = useState<Record<string, string>>({});
+  const [activeProjectForLogs, setActiveProjectForLogs] = useState<string | null>(null);
+
+  // Backup states
+  const [backups, setBackups] = useState<any[]>([]);
+  const [selectedDbForBackups, setSelectedDbForBackups] = useState<RegisteredDatabase | null>(null);
+  const [isBackupLoading, setIsBackupLoading] = useState(false);
+  const [isBackupCreating, setIsBackupCreating] = useState(false);
+
+  // Trigger Prisma Actions
+  const handlePrismaAction = async (projectName: string, action: string, extraArgs: Record<string, any> = {}) => {
+    setIsMigrationRunning(prev => ({ ...prev, [projectName]: true }));
+    setMigrationLogs("Führe Befehl aus... Bitte warten...\n");
+    setActiveProjectForLogs(projectName);
+    
+    try {
+      const res = await fetch("/api/manager/database/ops", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action,
+          projectName,
+          ...extraArgs
+        })
+      });
+      
+      const data = await res.json();
+      if (res.ok) {
+        setMigrationLogs(data.output || "Befehl erfolgreich abgeschlossen, kein Output erhalten.");
+        // Refresh projects to update hasMigrations indicator if we baselined
+        fetchProjects();
+      } else {
+        setMigrationLogs(`Fehler bei der Ausführung:\n${data.error || data.output || "Unbekannter Fehler"}`);
+      }
+    } catch (err) {
+      setMigrationLogs(`Verbindungsfehler:\n${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setIsMigrationRunning(prev => ({ ...prev, [projectName]: false }));
+    }
+  };
+
+  // Backups helper
+  const fetchBackups = async (dbId: string) => {
+    setIsBackupLoading(true);
+    try {
+      const res = await fetch("/api/manager/database/ops", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "backup-list", dbId })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setBackups(data.backups || []);
+      }
+    } catch (err) {
+      console.error("Failed to load backups:", err);
+    } finally {
+      setIsBackupLoading(false);
+    }
+  };
+
+  const handleCreateBackup = async (dbId: string) => {
+    setIsBackupCreating(true);
+    try {
+      const res = await fetch("/api/manager/database/ops", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "backup-create", dbId })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        alert(data.message || "Backup erfolgreich erstellt!");
+        fetchBackups(dbId);
+      } else {
+        alert(`Fehler beim Erstellen des Backups: ${data.error}`);
+      }
+    } catch (err) {
+      alert("Fehler bei der Verbindung.");
+    } finally {
+      setIsBackupCreating(false);
+    }
+  };
+
+  const handleRestoreBackup = async (dbId: string, filename: string) => {
+    if (!confirm(`Möchtest du das Backup '${filename}' wirklich wiederherstellen? Alle bestehenden Daten werden überschrieben!`)) {
+      return;
+    }
+    setIsBackupLoading(true);
+    try {
+      const res = await fetch("/api/manager/database/ops", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "backup-restore", dbId, filename })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        alert(data.message || "Backup erfolgreich wiederhergestellt!");
+      } else {
+        alert(`Fehler beim Wiederherstellen: ${data.error}`);
+      }
+    } catch (err) {
+      alert("Fehler bei der Verbindung.");
+    } finally {
+      setIsBackupLoading(false);
+      fetchDatabases(true); // refresh DB sizes
+    }
+  };
+
+  const handleDeleteBackup = async (dbId: string, filename: string) => {
+    if (!confirm(`Möchtest du das Backup '${filename}' wirklich unwiderruflich löschen?`)) {
+      return;
+    }
+    try {
+      const res = await fetch("/api/manager/database/ops", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "backup-delete", filename })
+      });
+      if (res.ok) {
+        fetchBackups(dbId);
+      } else {
+        const data = await res.json();
+        alert(`Fehler beim Löschen: ${data.error}`);
+      }
+    } catch (err) {
+      alert("Fehler bei der Verbindung.");
+    }
+  };
 
   const fetchResources = useCallback(async () => {
     setIsResourcesLoading(true);
@@ -903,7 +1037,7 @@ export default function DashboardPage() {
           }} 
           className={`${styles.tabButton} ${activeTab === "projects" ? styles.tabButtonActive : ""}`}
         >
-          Projekt-Verknüpfungen
+          Projekte
         </button>
       </div>
 
@@ -1608,6 +1742,23 @@ export default function DashboardPage() {
                         </span>
                       </div>
                       <div style={{ display: "flex", gap: "0.5rem" }}>
+                        {db.type === "postgres" && (
+                          <button 
+                            onClick={() => {
+                              setSelectedDbForBackups(db);
+                              fetchBackups(db.id);
+                            }} 
+                            className="btn btn-secondary btn-icon" 
+                            style={{ width: "30px", height: "30px" }} 
+                            title="Backups verwalten"
+                          >
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <ellipse cx="12" cy="5" rx="9" ry="3"></ellipse>
+                              <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path>
+                              <path d="M3 12c0 1.66 4 3 9 3s9-1.34 9-3"></path>
+                            </svg>
+                          </button>
+                        )}
                         <button onClick={() => startEditDb(db)} className="btn btn-secondary btn-icon" style={{ width: "30px", height: "30px" }} title="Bearbeiten">
                           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 1 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
                         </button>
@@ -2026,7 +2177,7 @@ export default function DashboardPage() {
       {activeTab === "projects" && (
         <div className="layout-main" style={{ animation: "fadeIn 0.3s ease-out" }}>
           <div className={styles.sectionHeader}>
-            <h2 className={styles.sectionTitle}>Projekt-Verknüpfungen</h2>
+            <h2 className={styles.sectionTitle}>Projekte</h2>
           </div>
           <p style={{ fontSize: "0.9rem", color: "var(--text-secondary)", marginBottom: "2rem" }}>
             Projekte mit einer <code>process-manager.json</code> Datei im Hauptverzeichnis werden hier aufgelistet.
@@ -2147,10 +2298,259 @@ export default function DashboardPage() {
                       })}
                     </tbody>
                   </table>
+
+                  {proj.hasPrisma && (
+                    <div style={{ borderTop: "1px solid var(--border-glass)", marginTop: "1.5rem", paddingTop: "1.5rem" }}>
+                      <h4 style={{ fontSize: "1.05rem", fontWeight: 600, color: "#fff", marginBottom: "0.75rem", display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" strokeWidth="2.5">
+                          <ellipse cx="12" cy="5" rx="9" ry="3"></ellipse>
+                          <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path>
+                          <path d="M3 12c0 1.66 4 3 9 3s9-1.34 9-3"></path>
+                        </svg>
+                        Datenbank-Migrationen & Tools (Prisma)
+                      </h4>
+
+                      {!proj.hasMigrations ? (
+                        <div style={{ background: "rgba(245, 158, 11, 0.08)", borderLeft: "3px solid var(--warning)", padding: "0.85rem 1rem", borderRadius: "8px", marginBottom: "1rem", fontSize: "0.85rem", color: "var(--text-secondary)" }}>
+                          <strong style={{ color: "var(--warning)" }}>Achtung:</strong> Keine Migrationshistorie im Projekt vorhanden. 
+                          Um Datenverlust zu vermeiden, kannst du deine Migrationshistorie initialisieren (Baselining) oder das Schema direkt synchronisieren (db push).
+                          <div style={{ display: "flex", gap: "0.75rem", marginTop: "0.75rem" }}>
+                            <button 
+                              onClick={() => handlePrismaAction(proj.name, "prisma-baseline")}
+                              disabled={isMigrationRunning[proj.name]}
+                              className="btn btn-primary"
+                              style={{ padding: "0.4rem 0.8rem", fontSize: "0.8rem" }}
+                            >
+                              Migrationshistorie initialisieren (Baselining - Daten behalten)
+                            </button>
+                            <button 
+                              onClick={() => handlePrismaAction(proj.name, "prisma-push")}
+                              disabled={isMigrationRunning[proj.name]}
+                              className="btn btn-secondary"
+                              style={{ padding: "0.4rem 0.8rem", fontSize: "0.8rem" }}
+                            >
+                              Schema direkt einspielen (db push)
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginBottom: "1rem" }}>
+                          <button 
+                            onClick={() => handlePrismaAction(proj.name, "prisma-status")}
+                            disabled={isMigrationRunning[proj.name]}
+                            className="btn btn-secondary"
+                            style={{ padding: "0.4rem 0.8rem", fontSize: "0.8rem" }}
+                          >
+                            Status prüfen (migrate status)
+                          </button>
+                          <button 
+                            onClick={() => handlePrismaAction(proj.name, "prisma-push")}
+                            disabled={isMigrationRunning[proj.name]}
+                            className="btn btn-secondary"
+                            style={{ padding: "0.4rem 0.8rem", fontSize: "0.8rem" }}
+                          >
+                            Push (db push)
+                          </button>
+                          <button 
+                            onClick={() => handlePrismaAction(proj.name, "prisma-generate")}
+                            disabled={isMigrationRunning[proj.name]}
+                            className="btn btn-secondary"
+                            style={{ padding: "0.4rem 0.8rem", fontSize: "0.8rem" }}
+                          >
+                            Client generieren
+                          </button>
+                        </div>
+                      )}
+
+                      {proj.hasMigrations && (
+                        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginTop: "1rem", borderTop: "1px solid rgba(255,255,255,0.04)", paddingTop: "1rem" }}>
+                          <input 
+                            type="text"
+                            placeholder="z. B. add_fuzzy_time"
+                            value={newMigrationName[proj.name] || ""}
+                            onChange={e => setNewMigrationName(prev => ({ ...prev, [proj.name]: e.target.value }))}
+                            className="input-field"
+                            style={{ maxWidth: "250px", padding: "0.4rem 0.75rem", fontSize: "0.85rem" }}
+                          />
+                          <button 
+                            onClick={() => {
+                              const name = newMigrationName[proj.name];
+                              if (!name) {
+                                alert("Bitte gib einen Namen für die Migration ein.");
+                                return;
+                              }
+                              handlePrismaAction(proj.name, "prisma-migrate", { migrationName: name });
+                              setNewMigrationName(prev => ({ ...prev, [proj.name]: "" }));
+                            }}
+                            disabled={isMigrationRunning[proj.name]}
+                            className="btn btn-primary"
+                            style={{ padding: "0.4rem 0.8rem", fontSize: "0.8rem" }}
+                          >
+                            Migration erstellen & anwenden
+                          </button>
+                        </div>
+                      )}
+
+                      {activeProjectForLogs === proj.name && (
+                        <div style={{ marginTop: "1.25rem" }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.35rem" }}>
+                            <span style={{ fontSize: "0.75rem", color: "var(--text-secondary)", fontWeight: 500 }}>Terminal-Ausgabe:</span>
+                            <button 
+                              onClick={() => {
+                                setActiveProjectForLogs(null);
+                                setMigrationLogs("");
+                              }}
+                              className="btn btn-secondary"
+                              style={{ padding: "0.2rem 0.4rem", fontSize: "0.7rem", height: "auto" }}
+                            >
+                              Schließen
+                            </button>
+                          </div>
+                          <pre style={{
+                            background: "#040507",
+                            border: "1px solid var(--border-glass)",
+                            borderRadius: "6px",
+                            padding: "0.75rem 1rem",
+                            fontFamily: "var(--font-mono)",
+                            fontSize: "0.8rem",
+                            color: "#10b981",
+                            overflowX: "auto",
+                            whiteSpace: "pre-wrap",
+                            maxHeight: "250px",
+                            overflowY: "auto"
+                          }}>
+                            {migrationLogs}
+                          </pre>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               );
             })
           )}
+        </div>
+      )}
+      {/* Backup Management Modal */}
+      {selectedDbForBackups && (
+        <div style={{
+          position: "fixed",
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: "rgba(0, 0, 0, 0.75)",
+          backdropFilter: "blur(8px)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          zIndex: 9999,
+          animation: "fadeIn 0.2s ease-out"
+        }}>
+          <div className="glass-panel" style={{
+            width: "90%",
+            maxWidth: "600px",
+            padding: "2rem",
+            maxHeight: "85vh",
+            display: "flex",
+            flexDirection: "column",
+            gap: "1.5rem"
+          }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid var(--border-glass)", paddingBottom: "1rem" }}>
+              <div>
+                <h3 style={{ fontSize: "1.25rem", fontWeight: 700, color: "#fff" }}>Backups für: {selectedDbForBackups.alias}</h3>
+                <span style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>Datenbank: {selectedDbForBackups.database}</span>
+              </div>
+              <button 
+                onClick={() => setSelectedDbForBackups(null)} 
+                className="btn btn-secondary btn-icon" 
+                style={{ width: "30px", height: "30px", borderRadius: "50%" }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span style={{ fontSize: "0.9rem", color: "var(--text-secondary)" }}>Manuelle Backups:</span>
+              <button 
+                onClick={() => handleCreateBackup(selectedDbForBackups.id)}
+                disabled={isBackupCreating}
+                className="btn btn-primary"
+                style={{ padding: "0.5rem 1rem", fontSize: "0.85rem" }}
+              >
+                {isBackupCreating ? (
+                  <>
+                    <svg className="spinner" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10" strokeDasharray="30 15"></circle></svg>
+                    <span>Erstelle Backup...</span>
+                  </>
+                ) : (
+                  <>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                    <span>Neues Backup erstellen</span>
+                  </>
+                )}
+              </button>
+            </div>
+
+            <div style={{ flex: 1, overflowY: "auto", minHeight: "150px", maxHeight: "300px" }}>
+              {isBackupLoading ? (
+                <div style={{ textAlign: "center", padding: "2rem" }}>
+                  <svg className="spinner" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" strokeWidth="2.5"><circle cx="12" cy="12" r="10" strokeDasharray="30 15"></circle></svg>
+                </div>
+              ) : backups.length === 0 ? (
+                <p style={{ color: "var(--text-muted)", fontStyle: "italic", textAlign: "center", paddingTop: "2rem" }}>
+                  Keine Backups für diese Datenbank gefunden.
+                </p>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+                  {backups.map(b => (
+                    <div key={b.filename} style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      padding: "0.75rem 1rem",
+                      background: "rgba(255,255,255,0.03)",
+                      border: "1px solid var(--border-glass)",
+                      borderRadius: "8px"
+                    }}>
+                      <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem", maxWidth: "70%" }}>
+                        <span style={{ fontSize: "0.85rem", fontWeight: 500, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={b.filename}>
+                          {b.filename}
+                        </span>
+                        <span style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>
+                          {new Date(b.createdAt).toLocaleString("de-DE")} &bull; {(b.sizeBytes / (1024 * 1024)).toFixed(2)} MB
+                        </span>
+                      </div>
+                      <div style={{ display: "flex", gap: "0.5rem" }}>
+                        <button 
+                          onClick={() => handleRestoreBackup(selectedDbForBackups.id, b.filename)}
+                          className="btn btn-secondary"
+                          style={{ padding: "0.35rem 0.75rem", fontSize: "0.75rem", color: "var(--warning)" }}
+                          title="Wiederherstellen"
+                        >
+                          Restore
+                        </button>
+                        <button 
+                          onClick={() => handleDeleteBackup(selectedDbForBackups.id, b.filename)}
+                          className="btn btn-secondary btn-icon"
+                          style={{ width: "28px", height: "28px", display: "flex", alignItems: "center", justifyContent: "center" }}
+                          title="Löschen"
+                        >
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div style={{ borderTop: "1px solid var(--border-glass)", paddingTop: "1rem", display: "flex", justifyContent: "flex-end" }}>
+              <button onClick={() => setSelectedDbForBackups(null)} className="btn btn-secondary" style={{ padding: "0.5rem 1rem" }}>
+                Schließen
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

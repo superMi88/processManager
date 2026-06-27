@@ -18,7 +18,9 @@ export async function GET() {
         name,
         path: p.projectPath,
         requirements: p.declaration.requirements,
-        links: store.links[name] || {}
+        links: store.links[name] || {},
+        hasPrisma: p.hasPrisma,
+        hasMigrations: p.hasMigrations
       };
     });
     
