@@ -57,12 +57,13 @@ export async function POST(request: Request) {
 
         // Check if user already exists
         const userCheck = await client.query("SELECT 1 FROM pg_roles WHERE rolname = $1", [newUser]);
+        const safePassword = newPassword.replace(/'/g, "''");
         if (userCheck.rows.length === 0) {
           // Create new user
-          await client.query(`CREATE USER "${safeUser}" WITH PASSWORD $1`, [newPassword]);
+          await client.query(`CREATE USER "${safeUser}" WITH PASSWORD '${safePassword}'`);
         } else {
           // Update password
-          await client.query(`ALTER USER "${safeUser}" WITH PASSWORD $1`, [newPassword]);
+          await client.query(`ALTER USER "${safeUser}" WITH PASSWORD '${safePassword}'`);
         }
 
         // Check if database already exists
