@@ -294,7 +294,7 @@ export async function POST(request: Request) {
           host: dbConfig.host,
           port: dbConfig.port,
           user: adminUser || selectedUser?.username || "postgres",
-          password: adminPassword !== undefined ? adminPassword : (selectedUser?.password || ""),
+          password: typeof adminPassword === 'string' ? adminPassword : (selectedUser?.password || ""),
           database: dbConfig.database,
           connectionTimeoutMillis: 5000,
         });

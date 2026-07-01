@@ -44,7 +44,7 @@ export async function POST(request: Request) {
         host,
         port: Number(port),
         user: adminUser || "postgres",
-        password: adminPassword,
+        password: typeof adminPassword === 'string' ? adminPassword : "",
         database: adminDb || "postgres",
         connectionTimeoutMillis: 5000,
       });
@@ -86,7 +86,7 @@ export async function POST(request: Request) {
           host,
           port: Number(port),
           user: adminUser || "postgres",
-          password: adminPassword,
+          password: typeof adminPassword === 'string' ? adminPassword : "",
           database: newDb, // connect directly to the newly created DB
           connectionTimeoutMillis: 5000,
         });
