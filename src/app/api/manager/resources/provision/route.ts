@@ -81,25 +81,58 @@ export async function POST(request: Request) {
         await client.end();
       }
 
-      // If a schema is specified and it is not the default public schema, we must connect to the newly created DB and create the schema
-      if (newSchema && newSchema !== "public") {
-        const schemaClient = new Client({
-          host,
-          port: Number(port),
-          user: adminUser || "postgres",
-          password: typeof adminPassword === 'string' ? adminPassword : "",
-          database: newDb, // connect directly to the newly created DB
-          connectionTimeoutMillis: 5000,
-        });
+      // Connect directly to the target database as the admin/superuser to configure permissions and transfer ownership
+      const targetDbClient = new Client({
+        host,
+        port: Number(port),
+        user: adminUser || "postgres",
+        password: typeof adminPassword === 'string' ? adminPassword : "",
+        database: newDb,
+        connectionTimeoutMillis: 5000,
+      });
 
-        await schemaClient.connect();
-        try {
-          const safeSchema = newSchema.replace(/"/g, '""');
-          const safeUser = newUser.replace(/"/g, '""');
-          await schemaClient.query(`CREATE SCHEMA IF NOT EXISTS "${safeSchema}" AUTHORIZATION "${safeUser}"`);
-        } finally {
-          await schemaClient.end();
+      await targetDbClient.connect();
+      try {
+        const targetSchema = newSchema || "public";
+        const safeSchema = targetSchema.replace(/"/g, '""');
+        const safeUser = newUser.replace(/"/g, '""');
+
+        if (targetSchema !== "public") {
+          await targetDbClient.query(`CREATE SCHEMA IF NOT EXISTS "${safeSchema}" AUTHORIZATION "${safeUser}"`);
         }
+
+        // Grant full schema privileges to the app user (required especially for PG 15+)
+        await targetDbClient.query(`GRANT ALL ON SCHEMA "${safeSchema}" TO "${safeUser}"`);
+        await targetDbClient.query(`GRANT USAGE, CREATE ON SCHEMA "${safeSchema}" TO "${safeUser}"`);
+
+        // If the database already existed and objects were created by the superuser or another role,
+        // we transfer ownership of all existing tables, sequences, and views to the new owner.
+        const sqlTransfer = `
+          DO $$
+          DECLARE
+              r RECORD;
+              target_user TEXT := $1;
+              target_schema TEXT := $2;
+          BEGIN
+              -- Transfer tables
+              FOR r IN (SELECT tablename FROM pg_tables WHERE schemaname = target_schema) LOOP
+                  EXECUTE 'ALTER TABLE ' || quote_ident(target_schema) || '.' || quote_ident(r.tablename) || ' OWNER TO ' || quote_ident(target_user) || ';';
+              END LOOP;
+              
+              -- Transfer sequences
+              FOR r IN (SELECT sequence_name FROM information_schema.sequences WHERE sequence_schema = target_schema) LOOP
+                  EXECUTE 'ALTER SEQUENCE ' || quote_ident(target_schema) || '.' || quote_ident(r.sequence_name) || ' OWNER TO ' || quote_ident(target_user) || ';';
+              END LOOP;
+
+              -- Transfer views
+              FOR r IN (SELECT table_name FROM information_schema.views WHERE table_schema = target_schema) LOOP
+                  EXECUTE 'ALTER VIEW ' || quote_ident(target_schema) || '.' || quote_ident(r.table_name) || ' OWNER TO ' || quote_ident(target_user) || ';';
+              END LOOP;
+          END $$;
+        `;
+        await targetDbClient.query(sqlTransfer, [newUser, targetSchema]);
+      } finally {
+        await targetDbClient.end();
       }
 
     } else if (type === "mongodb") {
