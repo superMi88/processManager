@@ -111,8 +111,8 @@ export async function POST(request: Request) {
           DO $$
           DECLARE
               r RECORD;
-              target_user TEXT := $1;
-              target_schema TEXT := $2;
+              target_user TEXT := '${newUser.replace(/'/g, "''")}';
+              target_schema TEXT := '${targetSchema.replace(/'/g, "''")}';
           BEGIN
               -- Transfer tables
               FOR r IN (SELECT tablename FROM pg_tables WHERE schemaname = target_schema) LOOP
@@ -130,7 +130,7 @@ export async function POST(request: Request) {
               END LOOP;
           END $$;
         `;
-        await targetDbClient.query(sqlTransfer, [newUser, targetSchema]);
+        await targetDbClient.query(sqlTransfer);
       } finally {
         await targetDbClient.end();
       }
