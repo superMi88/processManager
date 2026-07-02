@@ -18,6 +18,7 @@ export interface DatabaseConfig {
   database: string;
   schema?: string;
   users: DatabaseUser[];
+  superuser?: DatabaseUser;
 }
 
 export interface CredentialConfig {
@@ -55,7 +56,7 @@ export function readStore(): ResourceStore {
       const content = fs.readFileSync(STORE_PATH, "utf-8");
       const store = JSON.parse(content);
       
-      // Auto-migrate databases to support users array
+      // Auto-migrate databases to support users array and superuser field
       if (store.databases && Array.isArray(store.databases)) {
         let migrated = false;
         store.databases = store.databases.map((db: DatabaseConfig & { user?: string; password?: string }) => {
@@ -72,6 +73,15 @@ export function readStore(): ResourceStore {
             delete db.password;
             migrated = true;
           }
+          
+          // Migrate any existing u-migration user from users list to the superuser field
+          const migUserIdx = db.users.findIndex(u => u.id === "u-migration");
+          if (migUserIdx !== -1) {
+            db.superuser = db.users[migUserIdx];
+            db.users = db.users.filter(u => u.id !== "u-migration");
+            migrated = true;
+          }
+          
           return db;
         });
         if (migrated) {

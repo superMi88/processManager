@@ -48,6 +48,7 @@ interface RegisteredDatabase {
   database: string;
   schema?: string;
   users: DatabaseUser[];
+  superuser?: DatabaseUser;
 }
 
 interface RegisteredCredential {
@@ -529,9 +530,12 @@ export default function DashboardPage() {
     const users = [
       { id: "u-default", username: dbUser, password: dbPassword, alias: "Anwendungs-Benutzer" }
     ];
-    if (dbMigrationUser) {
-      users.push({ id: "u-migration", username: dbMigrationUser, password: dbMigrationPassword, alias: "Migrations-Benutzer" });
-    }
+    const superuser = dbMigrationUser ? {
+      id: "u-migration",
+      username: dbMigrationUser,
+      password: dbMigrationPassword,
+      alias: "Migrations-Benutzer"
+    } : undefined;
 
     const dbData = {
       id: editingDbId || undefined,
@@ -541,7 +545,8 @@ export default function DashboardPage() {
       port: Number(dbPort),
       database: dbDatabase,
       schema: dbType === "postgres" ? dbSchema : undefined,
-      users
+      users,
+      superuser
     };
 
     try {
@@ -758,7 +763,7 @@ export default function DashboardPage() {
     setDbPort(db.port);
     
     const appUser = db.users?.find(u => u.id === "u-default") || db.users?.[0];
-    const migUser = db.users?.find(u => u.id === "u-migration") || db.users?.[1];
+    const migUser = db.superuser || db.users?.find(u => u.id === "u-migration");
     
     setDbUser(appUser?.username || "");
     setDbPassword(appUser?.password || "");
@@ -2457,32 +2462,14 @@ export default function DashboardPage() {
                                     if (!selectedDb) return null;
                                     
                                     const selectedAppUserId = (pendingLinks[proj.name] || {})[`${req.key}_USER`] || "";
-                                    const selectedMigUserId = (pendingLinks[proj.name] || {})[`${req.key}_MIGRATION_USER`] || "";
 
                                     return (
-                                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.5rem", background: "rgba(255,255,255,0.02)", padding: "0.5rem", borderRadius: "6px", border: "1px solid var(--border-glass)" }}>
+                                      <div style={{ background: "rgba(255,255,255,0.02)", padding: "0.5rem", borderRadius: "6px", border: "1px solid var(--border-glass)" }}>
                                         <div className="input-group" style={{ marginBottom: 0 }}>
                                           <label className="input-label" style={{ fontSize: "0.7rem", color: "var(--text-secondary)", marginBottom: "0.15rem" }}>App-User (.env)</label>
                                           <select
                                             value={selectedAppUserId}
                                             onChange={e => handleLinkChange(proj.name, `${req.key}_USER`, e.target.value)}
-                                            className={styles.selectField}
-                                            style={{ fontSize: "0.75rem", padding: "0.25rem", height: "auto" }}
-                                          >
-                                            <option value="">Standard</option>
-                                            {selectedDb.users?.map(u => (
-                                              <option key={u.id} value={u.id}>
-                                                {u.username} ({u.alias || "User"})
-                                              </option>
-                                            ))}
-                                          </select>
-                                        </div>
-
-                                        <div className="input-group" style={{ marginBottom: 0 }}>
-                                          <label className="input-label" style={{ fontSize: "0.7rem", color: "var(--text-secondary)", marginBottom: "0.15rem" }}>Migration-User (CLI)</label>
-                                          <select
-                                            value={selectedMigUserId}
-                                            onChange={e => handleLinkChange(proj.name, `${req.key}_MIGRATION_USER`, e.target.value)}
                                             className={styles.selectField}
                                             style={{ fontSize: "0.75rem", padding: "0.25rem", height: "auto" }}
                                           >

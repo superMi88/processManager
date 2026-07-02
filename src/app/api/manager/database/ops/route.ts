@@ -83,9 +83,8 @@ export async function POST(request: Request) {
       }
 
       // Build database URL environment variable
-      // Choose database user: use Migration User if available, otherwise fallback to standard linked user
-      const migrationUserId = projectLinks[`${dbReq.key}_MIGRATION_USER`] || projectLinks[`${dbReq.key}_USER`];
-      const selectedUserObj = dbConfig.users?.find(u => u.id === migrationUserId) || dbConfig.users?.[0];
+      // Always use the superuser for migrations if configured, otherwise fallback to the selected app user
+      const selectedUserObj = dbConfig.superuser || dbConfig.users?.find(u => u.id === projectLinks[`${dbReq.key}_USER`]) || dbConfig.users?.[0];
       const databaseUrl = buildDatabaseUrl(dbConfig, selectedUserObj);
       const envVars: Record<string, string> = {};
       envVars[dbReq.key] = databaseUrl;
@@ -188,7 +187,7 @@ export async function POST(request: Request) {
           return NextResponse.json({ error: "Datenbank nicht gefunden" }, { status: 404 });
         }
         try {
-          const backupUser = dbConfig.users?.find(u => u.username === "postgres" || u.username === "admin") || dbConfig.users?.[0];
+          const backupUser = dbConfig.superuser || dbConfig.users?.find(u => u.username === "postgres" || u.username === "admin") || dbConfig.users?.[0];
           const createdFilename = await backupDatabase(dbConfig, backupUser);
           return NextResponse.json({ success: true, filename: createdFilename, message: "Backup erfolgreich erstellt." });
         } catch (backupErr) {
@@ -208,7 +207,7 @@ export async function POST(request: Request) {
           return NextResponse.json({ error: "Datenbank nicht gefunden" }, { status: 404 });
         }
         try {
-          const restoreUser = dbConfig.users?.find(u => u.username === "postgres" || u.username === "admin") || dbConfig.users?.[0];
+          const restoreUser = dbConfig.superuser || dbConfig.users?.find(u => u.username === "postgres" || u.username === "admin") || dbConfig.users?.[0];
           await restoreDatabase(dbConfig, filename, restoreUser);
           return NextResponse.json({ success: true, message: "Backup erfolgreich wiederhergestellt." });
         } catch (restoreErr) {
@@ -251,7 +250,7 @@ export async function POST(request: Request) {
           return NextResponse.json({ error: "Benutzerverwaltung wird aktuell nur für PostgreSQL unterstützt." }, { status: 400 });
         }
 
-        const selectedUser = dbConfig.users?.find(u => u.username === "postgres" || u.username === "admin") || dbConfig.users?.[0];
+        const selectedUser = dbConfig.superuser || dbConfig.users?.find(u => u.username === "postgres" || u.username === "admin") || dbConfig.users?.[0];
         const client = new Client({
           host: dbConfig.host,
           port: dbConfig.port,
@@ -289,7 +288,7 @@ export async function POST(request: Request) {
           return NextResponse.json({ error: "Berechtigungen werden aktuell nur für PostgreSQL unterstützt." }, { status: 400 });
         }
 
-        const selectedUser = dbConfig.users?.find(u => u.username === "postgres" || u.username === "admin") || dbConfig.users?.[0];
+        const selectedUser = dbConfig.superuser || dbConfig.users?.find(u => u.username === "postgres" || u.username === "admin") || dbConfig.users?.[0];
         const client = new Client({
           host: dbConfig.host,
           port: dbConfig.port,
