@@ -5,6 +5,7 @@ import { exec } from "child_process";
 import { Client } from "pg";
 import { 
   readStore, 
+  writeStore,
   getDiscoveredProjects, 
   buildDatabaseUrl 
 } from "@/lib/resource-store";
@@ -309,6 +310,68 @@ export async function POST(request: Request) {
       }
 
       return NextResponse.json({ error: "Ungültige Benutzer-Aktion" }, { status: 400 });
+    }
+
+    // 4. Database-level Destructive Operations (Drop Database)
+    if (action === "database-drop") {
+      if (!dbId) {
+        return NextResponse.json({ error: "Missing dbId parameter" }, { status: 400 });
+      }
+
+      const dbConfig = store.databases.find(d => d.id === dbId);
+      if (!dbConfig) {
+        return NextResponse.json({ error: "Datenbank nicht gefunden" }, { status: 404 });
+      }
+
+      if (dbConfig.type !== "postgres") {
+        return NextResponse.json({ error: "Das komplette Löschen vom Server wird aktuell nur für PostgreSQL unterstützt." }, { status: 400 });
+      }
+
+      // Connect to postgres database to drop the target database
+      const selectedUser = dbConfig.superuser || dbConfig.users?.find(u => u.username === "postgres" || u.username === "admin") || dbConfig.users?.[0];
+      
+      const client = new Client({
+        host: dbConfig.host,
+        port: dbConfig.port,
+        user: selectedUser?.username || "postgres",
+        password: selectedUser?.password || "",
+        database: "postgres",
+        connectionTimeoutMillis: 5000,
+      });
+
+      await client.connect();
+      try {
+        const safeDbName = dbConfig.database.replace(/"/g, '""');
+        // Drop database with FORCE option to terminate active connections
+        await client.query(`DROP DATABASE "${safeDbName}" WITH (FORCE);`);
+      } finally {
+        await client.end();
+      }
+
+      // Drop succeeded! Now remove from resources.json
+      store.databases = store.databases.filter(d => d.id !== dbId);
+
+      // Clean up links referencing deleted resource
+      for (const projName of Object.keys(store.links)) {
+        const projLinks = store.links[projName];
+        for (const envKey of Object.keys(projLinks)) {
+          if (projLinks[envKey] === dbId) {
+            delete projLinks[envKey];
+            delete projLinks[`${envKey}_USER`];
+            delete projLinks[`${envKey}_MIGRATION_USER`];
+          }
+        }
+      }
+
+      const success = writeStore(store);
+      if (!success) {
+        return NextResponse.json({ error: "Datenbank wurde gelöscht, konnte aber nicht aus der Konfiguration entfernt werden." }, { status: 500 });
+      }
+
+      return NextResponse.json({ 
+        success: true, 
+        message: `Datenbank '${dbConfig.database}' erfolgreich vom PostgreSQL-Server gelöscht und aus Konfiguration entfernt.` 
+      });
     }
 
     return NextResponse.json({ error: "Ungültige Aktion" }, { status: 400 });

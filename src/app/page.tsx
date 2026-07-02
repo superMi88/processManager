@@ -725,10 +725,56 @@ export default function DashboardPage() {
         const data = await res.json();
         setRegisteredDbs(data.databases || []);
         fetchProjects();
+        fetchDatabases(true);
       }
     } catch (err) {
       console.error(err);
       alert("Fehler beim Löschen.");
+    }
+  };
+
+  // Delete database completely from PostgreSQL server
+  const handleDropDatabaseCompletely = async (db: RegisteredDatabase) => {
+    const isPostgres = db.type === "postgres";
+    if (!isPostgres) {
+      alert("Das komplette Löschen vom Server wird aktuell nur für PostgreSQL unterstützt.");
+      return;
+    }
+
+    const firstConfirm = confirm(
+      `WARNUNG: Möchtest du die Datenbank '${db.database}' wirklich UNWIDERRUFLICH vom PostgreSQL-Server löschen?\n\nAlle Tabellen, Schemas und Daten gehen verloren und können nicht wiederhergestellt werden!`
+    );
+    if (!firstConfirm) return;
+
+    const secondConfirm = prompt(
+      `Dies ist die LETZTE Warnung. Willst du die Datenbank wirklich löschen? Gib 'LÖSCHEN' zur Bestätigung ein:`
+    );
+    if (secondConfirm !== "LÖSCHEN") {
+      alert("Löschvorgang abgebrochen (Falsches Bestätigungswort).");
+      return;
+    }
+
+    setActionInProgress(prev => ({ ...prev, [`drop-${db.id}`]: true }));
+    try {
+      const res = await fetch("/api/manager/database/ops", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "database-drop", dbId: db.id })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        alert(data.message);
+        fetchResources();
+        fetchProjects();
+        fetchDatabases(true);
+      } else {
+        alert(`Fehler beim Löschen vom Server: ${data.error}`);
+      }
+    } catch (err) {
+      console.error(err);
+      alert("Fehler beim Löschen vom Server.");
+    } finally {
+      setActionInProgress(prev => ({ ...prev, [`drop-${db.id}`]: false }));
     }
   };
 
@@ -1924,9 +1970,30 @@ export default function DashboardPage() {
                         <button onClick={() => startEditDb(db)} className="btn btn-secondary btn-icon" style={{ width: "30px", height: "30px" }} title="Bearbeiten">
                           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 1 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
                         </button>
-                        <button onClick={() => handleDeleteDatabase(db.id)} className="btn btn-secondary btn-icon" style={{ width: "30px", height: "30px" }} title="Löschen">
-                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                        <button onClick={() => handleDeleteDatabase(db.id)} className="btn btn-secondary btn-icon" style={{ width: "30px", height: "30px" }} title="Aus Dashboard entfernen">
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text-secondary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
                         </button>
+                        {db.type === "postgres" && (
+                          <button 
+                            onClick={() => handleDropDatabaseCompletely(db)} 
+                            className="btn btn-secondary btn-icon" 
+                            style={{ width: "30px", height: "30px" }} 
+                            title="Datenbank komplett vom PostgreSQL-Server LÖSCHEN"
+                            disabled={actionInProgress[`drop-${db.id}`]}
+                          >
+                            {actionInProgress[`drop-${db.id}`] ? (
+                              <svg className="spinner" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" strokeWidth="3"><circle cx="12" cy="12" r="10" strokeDasharray="30 15"></circle></svg>
+                            ) : (
+                              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <ellipse cx="12" cy="5" rx="9" ry="3"></ellipse>
+                                <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path>
+                                <path d="M3 12c0 1.66 4 3 9 3s9-1.34 9-3"></path>
+                                <line x1="14" y1="11" x2="20" y2="17"></line>
+                                <line x1="20" y1="11" x2="14" y2="17"></line>
+                              </svg>
+                            )}
+                          </button>
+                        )}
                       </div>
                     </div>
                   ))}
