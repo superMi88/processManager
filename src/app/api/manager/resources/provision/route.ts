@@ -146,9 +146,15 @@ export async function POST(request: Request) {
           id: "u-default",
           username: newUser,
           password: newPassword,
-          alias: "Standard-Benutzer"
+          alias: "Anwendungs-Benutzer"
         }
-      ]
+      ],
+      superuser: type === "postgres" ? {
+        id: "u-migration",
+        username: adminUser || "postgres",
+        password: adminPassword || "",
+        alias: "Migrations-Benutzer"
+      } : undefined
     };
 
     store.databases.push(newDbConfig);
