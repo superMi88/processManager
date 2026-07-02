@@ -86,8 +86,9 @@ const mockLogs: Record<string, string[]> = {
 };
 
 let isMockMode = false;
+let pm2Checked = false;
 
-// Attempt to connect to PM2 to see if it works. If it fails, default to mock mode.
+// Attempt to connect to PM2
 function connectPm2(): Promise<void> {
   return new Promise((resolve, reject) => {
     pm2.connect(true, (err) => {
@@ -100,10 +101,13 @@ function connectPm2(): Promise<void> {
   });
 }
 
-async function checkPm2Connection(): Promise<boolean> {
+async function checkPm2Available(): Promise<boolean> {
   if (isMockMode) return false;
+  if (pm2Checked) return true;
   try {
     await connectPm2();
+    pm2.disconnect();
+    pm2Checked = true;
     return true;
   } catch (error) {
     console.warn("Could not connect to PM2. Falling back to Mock Mode.", error);
@@ -112,8 +116,25 @@ async function checkPm2Connection(): Promise<boolean> {
   }
 }
 
+// Queue to serialize all PM2 connection operations and prevent sock/null conflicts
+let pm2Queue = Promise.resolve();
+
+function runPm2<T>(action: () => Promise<T>): Promise<T> {
+  const result = pm2Queue.then(async () => {
+    await connectPm2();
+    try {
+      return await action();
+    } finally {
+      pm2.disconnect();
+    }
+  });
+  // Chain resolved/rejected promise to release the queue
+  pm2Queue = result.then(() => {}, () => {});
+  return result;
+}
+
 export async function listProcesses(): Promise<ProcessInfo[]> {
-  const pm2Available = await checkPm2Connection();
+  const pm2Available = await checkPm2Available();
 
   if (!pm2Available) {
     // Return mock data, but dynamically update cpu and memory slightly for realistic dashboard updates
@@ -132,10 +153,9 @@ export async function listProcesses(): Promise<ProcessInfo[]> {
     });
   }
 
-  return new Promise((resolve, reject) => {
+  return runPm2(() => new Promise((resolve, reject) => {
     pm2.list((err, list) => {
       if (err) {
-        pm2.disconnect();
         return reject(err);
       }
 
@@ -155,14 +175,13 @@ export async function listProcesses(): Promise<ProcessInfo[]> {
         };
       });
 
-      pm2.disconnect();
       resolve(processes);
     });
-  });
+  }));
 }
 
 export async function stopProcess(nameOrId: string | number): Promise<boolean> {
-  const pm2Available = await checkPm2Connection();
+  const pm2Available = await checkPm2Available();
 
   if (!pm2Available) {
     mockProcesses = mockProcesses.map((p) => {
@@ -184,9 +203,8 @@ export async function stopProcess(nameOrId: string | number): Promise<boolean> {
     return true;
   }
 
-  return new Promise((resolve) => {
+  return runPm2(() => new Promise((resolve) => {
     pm2.stop(nameOrId, (err) => {
-      pm2.disconnect();
       if (err) {
         console.error(`Failed to stop process ${nameOrId}:`, err);
         resolve(false);
@@ -194,11 +212,11 @@ export async function stopProcess(nameOrId: string | number): Promise<boolean> {
         resolve(true);
       }
     });
-  });
+  }));
 }
 
 export async function startProcess(nameOrId: string | number): Promise<boolean> {
-  const pm2Available = await checkPm2Connection();
+  const pm2Available = await checkPm2Available();
 
   if (!pm2Available) {
     mockProcesses = mockProcesses.map((p) => {
@@ -220,9 +238,8 @@ export async function startProcess(nameOrId: string | number): Promise<boolean> 
     return true;
   }
 
-  return new Promise((resolve) => {
+  return runPm2(() => new Promise((resolve) => {
     pm2.start(nameOrId as string, (err) => {
-      pm2.disconnect();
       if (err) {
         console.error(`Failed to start process ${nameOrId}:`, err);
         resolve(false);
@@ -230,11 +247,11 @@ export async function startProcess(nameOrId: string | number): Promise<boolean> 
         resolve(true);
       }
     });
-  });
+  }));
 }
 
 export async function restartProcess(nameOrId: string | number): Promise<boolean> {
-  const pm2Available = await checkPm2Connection();
+  const pm2Available = await checkPm2Available();
 
   if (!pm2Available) {
     mockProcesses = mockProcesses.map((p) => {
@@ -257,12 +274,11 @@ export async function restartProcess(nameOrId: string | number): Promise<boolean
     return true;
   }
 
-  return new Promise((resolve) => {
+  return runPm2(() => new Promise((resolve) => {
     // Pass { updateEnv: true } to tell PM2 to update cached environment variables from the environment
     // We cast to any to bypass incomplete TypeScript typings for the 3-argument signature
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (pm2 as any).restart(nameOrId, { updateEnv: true }, (err: any) => {
-      pm2.disconnect();
       if (err) {
         console.error(`Failed to restart process ${nameOrId}:`, err);
         resolve(false);
@@ -270,11 +286,11 @@ export async function restartProcess(nameOrId: string | number): Promise<boolean
         resolve(true);
       }
     });
-  });
+  }));
 }
 
 export async function getProcessLogs(nameOrId: string | number, maxLines: number = 100): Promise<string[]> {
-  const pm2Available = await checkPm2Connection();
+  const pm2Available = await checkPm2Available();
 
   if (!pm2Available) {
     // Find mock process name
@@ -285,18 +301,15 @@ export async function getProcessLogs(nameOrId: string | number, maxLines: number
     return ["[MOCK] No logs available for this mock process."];
   }
 
-  return new Promise((resolve) => {
+  return runPm2(() => new Promise((resolve) => {
     pm2.describe(nameOrId, (err, desc) => {
       if (err || !desc || desc.length === 0) {
-        pm2.disconnect();
         return resolve([`Failed to find process descriptions or logs for ${nameOrId}`]);
       }
 
       const pInfo = desc[0];
       const outLog = pInfo.pm2_env?.pm_out_log_path;
       const errLog = pInfo.pm2_env?.pm_err_log_path;
-
-      pm2.disconnect();
 
       const logLines: string[] = [];
 
@@ -325,5 +338,5 @@ export async function getProcessLogs(nameOrId: string | number, maxLines: number
         resolve([`Error reading log files from filesystem: ${fsErr instanceof Error ? fsErr.message : fsErr}`]);
       }
     });
-  });
+  }));
 }

@@ -255,7 +255,14 @@ export async function applyProjectEnvironment(projectName: string): Promise<{ su
     // We assume the PM2 process name matches the project name (e.g. "kiSystem") or lowercase project name
     setTimeout(async () => {
       try {
-        const pm2Names = [projectName, projectName.toLowerCase(), `${projectName}-server`];
+        const kebabCase = projectName.replace(/([a-z0-9])([A-Z])/g, "$1-$2").toLowerCase();
+        const pm2Names = [
+          projectName,
+          projectName.toLowerCase(),
+          `${projectName}-server`,
+          kebabCase,
+          `${kebabCase}-server`
+        ];
         let restarted = false;
         for (const name of pm2Names) {
           const success = await restartProcess(name);
