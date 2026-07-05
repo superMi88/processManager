@@ -111,6 +111,56 @@ function ensureMigrationLock(projectPath: string) {
   }
 }
 
+async function ensureShadowDatabase(dbConfig: any, shadowDbName: string) {
+  if (dbConfig.type !== "postgres") return;
+  
+  const selectedUser = dbConfig.superuser || dbConfig.users?.find((u: any) => u.username === "postgres" || u.username === "admin") || dbConfig.users?.[0];
+  
+  const client = new Client({
+    host: dbConfig.host,
+    port: dbConfig.port,
+    user: selectedUser?.username || "postgres",
+    password: selectedUser?.password || "",
+    database: "postgres",
+    connectionTimeoutMillis: 5000,
+  });
+
+  try {
+    await client.connect();
+    const checkRes = await client.query("SELECT 1 FROM pg_database WHERE datname = $1", [shadowDbName]);
+    if (checkRes.rowCount === 0) {
+      const escapedDbName = shadowDbName.replace(/"/g, '""');
+      await client.query(`CREATE DATABASE "${escapedDbName}"`);
+      console.log(`Created shadow database: ${shadowDbName}`);
+    }
+  } catch (err) {
+    console.error(`Failed to ensure shadow database ${shadowDbName} exists:`, err);
+    try {
+      const fallbackClient = new Client({
+        host: dbConfig.host,
+        port: dbConfig.port,
+        user: selectedUser?.username || "postgres",
+        password: selectedUser?.password || "",
+        database: dbConfig.database,
+        connectionTimeoutMillis: 5000,
+      });
+      await fallbackClient.connect();
+      const checkRes = await fallbackClient.query("SELECT 1 FROM pg_database WHERE datname = $1", [shadowDbName]);
+      if (checkRes.rowCount === 0) {
+        const escapedDbName = shadowDbName.replace(/"/g, '""');
+        await fallbackClient.query(`CREATE DATABASE "${escapedDbName}"`);
+      }
+      await fallbackClient.end();
+    } catch (fallbackErr) {
+      console.error(`Fallback failed to ensure shadow database ${shadowDbName}:`, fallbackErr);
+    }
+  } finally {
+    try {
+      await client.end();
+    } catch {}
+  }
+}
+
 export async function POST(request: Request) {
   try {
     const body = await request.json();
@@ -189,6 +239,10 @@ export async function POST(request: Request) {
           ensureMigrationLock(projectPath);
           
           const shadowDatabaseUrl = getShadowDatabaseUrl(databaseUrl);
+          
+          // Ensure shadow database exists for Postgres
+          const shadowDbName = dbConfig.database + "_shadow";
+          await ensureShadowDatabase(dbConfig, shadowDbName);
           
           // Step 1: Generate migration SQL using "prisma migrate diff" (fully non-interactive)
           const diffCmd = `npx prisma migrate diff --from-migrations prisma/migrations --to-schema-datamodel prisma/schema.prisma --shadow-database-url "${shadowDatabaseUrl}" --script`;
