@@ -9,10 +9,11 @@ export async function GET(
   try {
     const columns = await getColumns(id, tableName);
     return NextResponse.json({ success: true, columns });
-  } catch (error: any) {
+  } catch (error) {
     console.error(`Failed to get columns for table '${tableName}':`, error);
+    const errMsg = error instanceof Error ? error.message : String(error);
     return NextResponse.json(
-      { error: error?.message || "Fehler beim Laden der Spalten-Metadaten." },
+      { error: errMsg || "Fehler beim Laden der Spalten-Metadaten." },
       { status: 500 }
     );
   }
@@ -36,10 +37,11 @@ export async function POST(
     });
 
     return NextResponse.json({ success: true, ...result });
-  } catch (error: any) {
+  } catch (error) {
     console.error(`Failed to query rows for table '${tableName}':`, error);
+    const errMsg = error instanceof Error ? error.message : String(error);
     return NextResponse.json(
-      { error: error?.message || "Fehler beim Abfragen der Tabellendaten." },
+      { error: errMsg || "Fehler beim Abfragen der Tabellendaten." },
       { status: 500 }
     );
   }

@@ -9,10 +9,11 @@ export async function GET(
     const { id } = await context.params;
     const tables = await getTables(id);
     return NextResponse.json({ success: true, tables });
-  } catch (error: any) {
+  } catch (error) {
     console.error(`Failed to get tables for database:`, error);
+    const errMsg = error instanceof Error ? error.message : String(error);
     return NextResponse.json(
-      { error: error?.message || "Fehler beim Laden der Tabellen." },
+      { error: errMsg || "Fehler beim Laden der Tabellen." },
       { status: 500 }
     );
   }

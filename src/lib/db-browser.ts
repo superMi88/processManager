@@ -15,7 +15,7 @@ export interface ColumnMeta {
 }
 
 export interface QueryRowsOptions {
-  filters?: { column: string; operator: string; value: any }[];
+  filters?: { column: string; operator: string; value: unknown }[];
   sortColumn?: string;
   sortDirection?: "ASC" | "DESC";
   limit?: number;
@@ -23,7 +23,7 @@ export interface QueryRowsOptions {
 }
 
 export interface QueryRowsResult {
-  rows: any[];
+  rows: Record<string, unknown>[];
   totalCount: number;
   limit: number;
   offset: number;
@@ -55,8 +55,9 @@ export async function getDbClient(dbId: string): Promise<{ client: Client; schem
 
   try {
     await client.connect();
-  } catch (error: any) {
-    throw new Error(`Verbindung zur Datenbank fehlgeschlagen: ${error?.message || String(error)}`);
+  } catch (error) {
+    const errMsg = error instanceof Error ? error.message : String(error);
+    throw new Error(`Verbindung zur Datenbank fehlgeschlagen: ${errMsg}`);
   }
 
   return { client, schema: db.schema || "public" };
@@ -162,7 +163,7 @@ export async function queryRows(
     const offset = options.offset ? Math.max(0, options.offset) : 0;
 
     const whereClauses: string[] = [];
-    const queryParams: any[] = [];
+    const queryParams: unknown[] = [];
     let paramIdx = 1;
 
     // 2. Safely parse and build filter conditions

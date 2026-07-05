@@ -170,11 +170,11 @@ export default function DashboardPage() {
   const [browserTables, setBrowserTables] = useState<{ name: string; columnCount: number }[]>([]);
   const [activeBrowserTable, setActiveBrowserTable] = useState<string | null>(null);
   const [browserColumns, setBrowserColumns] = useState<{ name: string; dataType: string; isNullable: boolean; columnDefault: string | null; isPrimaryKey: boolean }[]>([]);
-  const [browserRows, setBrowserRows] = useState<any[]>([]);
+  const [browserRows, setBrowserRows] = useState<Record<string, unknown>[]>([]);
   const [browserTotalCount, setBrowserTotalCount] = useState(0);
   const [browserLimit, setBrowserLimit] = useState(50);
   const [browserOffset, setBrowserOffset] = useState(0);
-  const [browserFilters, setBrowserFilters] = useState<{ column: string; operator: string; value: any }[]>([]);
+  const [browserFilters, setBrowserFilters] = useState<{ column: string; operator: string; value: unknown }[]>([]);
   const [browserSortColumn, setBrowserSortColumn] = useState<string | null>(null);
   const [browserSortDirection, setBrowserSortDirection] = useState<"ASC" | "DESC">("ASC");
   const [isBrowserTablesLoading, setIsBrowserTablesLoading] = useState(false);
@@ -243,9 +243,10 @@ export default function DashboardPage() {
       } else {
         alert(`Fehler beim Laden der Tabellen: ${data.error || "Unbekannter Fehler"}`);
       }
-    } catch (err: any) {
+    } catch (err) {
       console.error("Failed to load tables:", err);
-      alert(`Fehler beim Laden der Tabellen: ${err?.message || String(err)}`);
+      const errMsg = err instanceof Error ? err.message : String(err);
+      alert(`Fehler beim Laden der Tabellen: ${errMsg}`);
     } finally {
       setIsBrowserTablesLoading(false);
     }
@@ -278,9 +279,10 @@ export default function DashboardPage() {
       } else {
         alert(`Fehler beim Laden der Tabellenstruktur: ${colData.error || "Unbekannter Fehler"}`);
       }
-    } catch (err: any) {
+    } catch (err) {
       console.error("Failed to select table:", err);
-      alert(`Fehler beim Laden der Tabellenstruktur: ${err?.message || String(err)}`);
+      const errMsg = err instanceof Error ? err.message : String(err);
+      alert(`Fehler beim Laden der Tabellenstruktur: ${errMsg}`);
     } finally {
       setIsBrowserDataLoading(false);
     }
@@ -290,7 +292,7 @@ export default function DashboardPage() {
     dbId: string,
     tableName: string,
     options: {
-      filters: any[];
+      filters: unknown[];
       sortColumn: string | null;
       sortDirection: "ASC" | "DESC";
       limit: number;
@@ -319,9 +321,10 @@ export default function DashboardPage() {
       } else {
         alert(`Fehler beim Laden der Zeilen: ${data.error || "Unbekannter Fehler"}`);
       }
-    } catch (err: any) {
+    } catch (err) {
       console.error("Failed to load rows:", err);
-      alert(`Fehler beim Laden der Zeilen: ${err?.message || String(err)}`);
+      const errMsg = err instanceof Error ? err.message : String(err);
+      alert(`Fehler beim Laden der Zeilen: ${errMsg}`);
     } finally {
       setIsBrowserDataLoading(false);
     }
@@ -3586,7 +3589,7 @@ export default function DashboardPage() {
                                     const val = row[col.name];
                                     let formattedVal = "";
                                     let isNull = false;
-                                    let cellStyle: React.CSSProperties = {
+                                    const cellStyle: React.CSSProperties = {
                                       padding: "0.6rem 1rem",
                                       verticalAlign: "top",
                                       maxWidth: "300px",
