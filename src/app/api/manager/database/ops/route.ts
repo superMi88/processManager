@@ -117,8 +117,64 @@ export async function POST(request: Request) {
           return NextResponse.json({ error: "Ungültiger Migrationsname. Nur Buchstaben, Zahlen und Unterstriche erlaubt." }, { status: 400 });
         }
         
-        const res = await runCommand(`npx prisma migrate dev --name ${migrationName}`, projectPath, envVars);
-        return NextResponse.json(res);
+        try {
+          // Step 1: Generate migration SQL using "prisma migrate diff" (fully non-interactive)
+          const diffCmd = `npx prisma migrate diff --from-migrations prisma/migrations --to-schema-datamodel prisma/schema.prisma --script`;
+          const diffRes = await runCommandRaw(diffCmd, projectPath, envVars);
+          if (!diffRes.success) {
+            return NextResponse.json({
+              success: false,
+              output: `Erstellung der SQL-Migration mit 'prisma migrate diff' fehlgeschlagen.\n\n--- STDOUT ---\n${diffRes.stdout}\n\n--- STDERR ---\n${diffRes.stderr}`
+            });
+          }
+
+          // Check if there are actual changes
+          const cleanSql = diffRes.stdout.replace(/--.*$/gm, "").trim();
+          if (cleanSql.length === 0) {
+            return NextResponse.json({
+              success: true,
+              output: "Keine Änderungen am Schema erkannt. Die Datenbank ist bereits aktuell."
+            });
+          }
+
+          // Step 2: Create directory and write migration.sql
+          const now = new Date();
+          const timestamp = now.getUTCFullYear().toString().padStart(4, "0") +
+            (now.getUTCMonth() + 1).toString().padStart(2, "0") +
+            now.getUTCDate().toString().padStart(2, "0") +
+            now.getUTCHours().toString().padStart(2, "0") +
+            now.getUTCMinutes().toString().padStart(2, "0") +
+            now.getUTCSeconds().toString().padStart(2, "0");
+          
+          const folderName = `${timestamp}_${migrationName}`;
+          const migrationsDir = path.join(projectPath, "prisma", "migrations");
+          const migrationFolder = path.join(migrationsDir, folderName);
+          
+          fs.mkdirSync(migrationFolder, { recursive: true });
+          fs.writeFileSync(path.join(migrationFolder, "migration.sql"), diffRes.stdout, "utf-8");
+
+          // Step 3: Apply migrations using deploy
+          const deployRes = await runCommand("npx prisma migrate deploy", projectPath, envVars);
+          if (!deployRes.success) {
+            return NextResponse.json({
+              success: false,
+              output: `Migration wurde generiert (prisma/migrations/${folderName}), aber das Anwenden (deploy) ist fehlgeschlagen.\n\n${deployRes.output}`
+            });
+          }
+
+          // Step 4: Regenerate Prisma Client
+          const generateRes = await runCommand("npx prisma generate", projectPath, envVars);
+
+          return NextResponse.json({
+            success: generateRes.success,
+            output: `Migration erfolgreich erstellt und angewendet!\n\n--- Deploy ---\n${deployRes.output}\n\n--- Generate ---\n${generateRes.output}`
+          });
+        } catch (err) {
+          return NextResponse.json({
+            success: false,
+            output: `Fehler beim Ausführen der Migration: ${err instanceof Error ? err.message : String(err)}`
+          });
+        }
       } 
       
       else if (action === "prisma-baseline") {
