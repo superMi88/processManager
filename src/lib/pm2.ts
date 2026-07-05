@@ -284,10 +284,8 @@ export async function restartProcess(nameOrId: string | number): Promise<boolean
 
   return runPm2(
     () => new Promise((resolve) => {
-      // Pass { updateEnv: true } to tell PM2 to update cached environment variables from the environment
-      // We cast to any to bypass incomplete TypeScript typings for the 3-argument signature
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (pm2 as any).restart(nameOrId, { updateEnv: true }, (err: any) => {
+      (pm2 as any).restart(nameOrId, (err: any) => {
         if (err) {
           console.error(`Failed to restart process ${nameOrId}:`, err);
           resolve(false);
