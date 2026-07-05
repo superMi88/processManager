@@ -54,6 +54,27 @@ function getDatabaseProvider(schemaPath: string): string {
   }
 }
 
+function getShadowDatabaseUrl(databaseUrl: string): string {
+  try {
+    const urlObj = new URL(databaseUrl);
+    if (urlObj.protocol === "file:") {
+      return databaseUrl.replace(/\.db$/, "_shadow.db");
+    }
+    let pathname = urlObj.pathname;
+    if (pathname.endsWith("/")) {
+      pathname = pathname.slice(0, -1);
+    }
+    urlObj.pathname = pathname + "_shadow";
+    return urlObj.toString();
+  } catch {
+    if (databaseUrl.includes("?")) {
+      const parts = databaseUrl.split("?");
+      return parts[0] + "_shadow?" + parts[1];
+    }
+    return databaseUrl + "_shadow";
+  }
+}
+
 function ensureMigrationLock(projectPath: string) {
   const migrationsDir = path.join(projectPath, "prisma", "migrations");
   if (!fs.existsSync(migrationsDir)) {
@@ -146,8 +167,10 @@ export async function POST(request: Request) {
         try {
           ensureMigrationLock(projectPath);
           
+          const shadowDatabaseUrl = getShadowDatabaseUrl(databaseUrl);
+          
           // Step 1: Generate migration SQL using "prisma migrate diff" (fully non-interactive)
-          const diffCmd = `npx prisma migrate diff --from-migrations prisma/migrations --to-schema-datamodel prisma/schema.prisma --script`;
+          const diffCmd = `npx prisma migrate diff --from-migrations prisma/migrations --to-schema-datamodel prisma/schema.prisma --shadow-database-url "${shadowDatabaseUrl}" --script`;
           const diffRes = await runCommandRaw(diffCmd, projectPath, envVars);
           if (!diffRes.success) {
             return NextResponse.json({
