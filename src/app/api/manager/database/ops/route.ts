@@ -305,6 +305,19 @@ export async function POST(request: Request) {
         }
       } 
       
+      else if (action === "prisma-resolve") {
+        if (!migrationName) {
+          return NextResponse.json({ error: "Migrationsname erforderlich" }, { status: 400 });
+        }
+        // Validate name to prevent command injection
+        if (!/^[a-zA-Z0-9_\-]+$/.test(migrationName)) {
+          return NextResponse.json({ error: "Ungültiger Migrationsname. Nur Buchstaben, Zahlen und Unterstriche erlaubt." }, { status: 400 });
+        }
+        
+        const res = await runCommand(`npx prisma migrate resolve --applied ${migrationName}`, projectPath, envVars);
+        return NextResponse.json(res);
+      }
+      
       else if (action === "prisma-baseline") {
         try {
           const baselineName = "initial_migration";

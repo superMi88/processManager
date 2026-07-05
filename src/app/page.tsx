@@ -2676,6 +2676,37 @@ export default function DashboardPage() {
                           }}>
                             {migrationLogs}
                           </pre>
+                          
+                          {(() => {
+                            const match = migrationLogs.match(/Migration name:\s*(\S+)/i);
+                            if (match && match[1]) {
+                              const failedMigration = match[1];
+                              return (
+                                <div style={{ 
+                                  marginTop: "0.75rem", 
+                                  background: "rgba(239, 68, 68, 0.08)", 
+                                  border: "1px solid rgba(239, 68, 68, 0.2)", 
+                                  borderRadius: "6px", 
+                                  padding: "0.75rem 1rem" 
+                                }}>
+                                  <div style={{ fontSize: "0.85rem", color: "var(--text-secondary)", marginBottom: "0.5rem" }}>
+                                    Prisma hat eine fehlgeschlagene Migration erkannt: <strong style={{ color: "#ef4444" }}>{failedMigration}</strong>
+                                    <br />
+                                    Falls die Änderungen bereits in der Datenbank existieren, kannst du diese Migration als angewendet markieren, um fortzufahren.
+                                  </div>
+                                  <button
+                                    onClick={() => handlePrismaAction(proj.name, "prisma-resolve", { migrationName: failedMigration })}
+                                    disabled={isMigrationRunning[proj.name]}
+                                    className="btn btn-danger"
+                                    style={{ padding: "0.35rem 0.75rem", fontSize: "0.8rem", background: "#dc2626", border: "none" }}
+                                  >
+                                    Migration als angewendet markieren (migrate resolve)
+                                  </button>
+                                </div>
+                              );
+                            }
+                            return null;
+                          })()}
                         </div>
                       )}
                     </div>
