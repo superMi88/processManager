@@ -2678,9 +2678,11 @@ export default function DashboardPage() {
                           </pre>
                           
                           {(() => {
-                            const match = migrationLogs.match(/Migration name:\s*(\S+)/i);
-                            if (match && match[1]) {
-                              const failedMigration = match[1];
+                            const match1 = migrationLogs.match(/Migration name:\s*(\S+)/i);
+                            const match2 = migrationLogs.match(/The\s+`([^`]+)`\s+migration/i);
+                            const failedMigration = (match1 && match1[1]) || (match2 && match2[1]);
+                            
+                            if (failedMigration) {
                               return (
                                 <div style={{ 
                                   marginTop: "0.75rem", 
