@@ -165,6 +165,22 @@ export default function DashboardPage() {
   const [isBackupLoading, setIsBackupLoading] = useState(false);
   const [isBackupCreating, setIsBackupCreating] = useState(false);
 
+  // Database Browser states
+  const [selectedDbForBrowser, setSelectedDbForBrowser] = useState<RegisteredDatabase | null>(null);
+  const [browserTables, setBrowserTables] = useState<{ name: string; columnCount: number }[]>([]);
+  const [activeBrowserTable, setActiveBrowserTable] = useState<string | null>(null);
+  const [browserColumns, setBrowserColumns] = useState<{ name: string; dataType: string; isNullable: boolean; columnDefault: string | null; isPrimaryKey: boolean }[]>([]);
+  const [browserRows, setBrowserRows] = useState<any[]>([]);
+  const [browserTotalCount, setBrowserTotalCount] = useState(0);
+  const [browserLimit, setBrowserLimit] = useState(50);
+  const [browserOffset, setBrowserOffset] = useState(0);
+  const [browserFilters, setBrowserFilters] = useState<{ column: string; operator: string; value: any }[]>([]);
+  const [browserSortColumn, setBrowserSortColumn] = useState<string | null>(null);
+  const [browserSortDirection, setBrowserSortDirection] = useState<"ASC" | "DESC">("ASC");
+  const [isBrowserTablesLoading, setIsBrowserTablesLoading] = useState(false);
+  const [isBrowserDataLoading, setIsBrowserDataLoading] = useState(false);
+  const [browserTableSearch, setBrowserTableSearch] = useState("");
+
   // User states
   const [dbUsers, setDbUsers] = useState<{ username: string; cancreatedb: boolean; issuperuser: boolean }[]>([]);
   const [selectedDbForUsers, setSelectedDbForUsers] = useState<RegisteredDatabase | null>(null);
@@ -204,6 +220,167 @@ export default function DashboardPage() {
     } finally {
       setIsMigrationRunning(prev => ({ ...prev, [projectName]: false }));
     }
+  };
+
+  // DB Browser helpers
+  const fetchBrowserTables = async (dbId: string) => {
+    setIsBrowserTablesLoading(true);
+    setBrowserTables([]);
+    setActiveBrowserTable(null);
+    setBrowserColumns([]);
+    setBrowserRows([]);
+    setBrowserTotalCount(0);
+    setBrowserFilters([]);
+    setBrowserSortColumn(null);
+    setBrowserSortDirection("ASC");
+    setBrowserOffset(0);
+
+    try {
+      const res = await fetch(`/api/databases/${dbId}/tables`);
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setBrowserTables(data.tables || []);
+      } else {
+        alert(`Fehler beim Laden der Tabellen: ${data.error || "Unbekannter Fehler"}`);
+      }
+    } catch (err: any) {
+      console.error("Failed to load tables:", err);
+      alert(`Fehler beim Laden der Tabellen: ${err?.message || String(err)}`);
+    } finally {
+      setIsBrowserTablesLoading(false);
+    }
+  };
+
+  const selectBrowserTable = async (dbId: string, tableName: string) => {
+    setActiveBrowserTable(tableName);
+    setBrowserColumns([]);
+    setBrowserRows([]);
+    setBrowserTotalCount(0);
+    setBrowserFilters([]);
+    setBrowserSortColumn(null);
+    setBrowserSortDirection("ASC");
+    setBrowserOffset(0);
+    
+    setIsBrowserDataLoading(true);
+    try {
+      const colRes = await fetch(`/api/databases/${dbId}/tables/${tableName}`);
+      const colData = await colRes.json();
+      if (colRes.ok && colData.success) {
+        setBrowserColumns(colData.columns || []);
+        
+        await fetchBrowserRows(dbId, tableName, {
+          filters: [],
+          sortColumn: null,
+          sortDirection: "ASC",
+          limit: browserLimit,
+          offset: 0
+        });
+      } else {
+        alert(`Fehler beim Laden der Tabellenstruktur: ${colData.error || "Unbekannter Fehler"}`);
+      }
+    } catch (err: any) {
+      console.error("Failed to select table:", err);
+      alert(`Fehler beim Laden der Tabellenstruktur: ${err?.message || String(err)}`);
+    } finally {
+      setIsBrowserDataLoading(false);
+    }
+  };
+
+  const fetchBrowserRows = async (
+    dbId: string,
+    tableName: string,
+    options: {
+      filters: any[];
+      sortColumn: string | null;
+      sortDirection: "ASC" | "DESC";
+      limit: number;
+      offset: number;
+    }
+  ) => {
+    setIsBrowserDataLoading(true);
+    try {
+      const res = await fetch(`/api/databases/${dbId}/tables/${tableName}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          filters: options.filters,
+          sortColumn: options.sortColumn,
+          sortDirection: options.sortDirection,
+          limit: options.limit,
+          offset: options.offset
+        })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setBrowserRows(data.rows || []);
+        setBrowserTotalCount(data.totalCount || 0);
+        setBrowserLimit(data.limit || 50);
+        setBrowserOffset(data.offset || 0);
+      } else {
+        alert(`Fehler beim Laden der Zeilen: ${data.error || "Unbekannter Fehler"}`);
+      }
+    } catch (err: any) {
+      console.error("Failed to load rows:", err);
+      alert(`Fehler beim Laden der Zeilen: ${err?.message || String(err)}`);
+    } finally {
+      setIsBrowserDataLoading(false);
+    }
+  };
+
+  const handleBrowserSort = (columnName: string) => {
+    if (!selectedDbForBrowser || !activeBrowserTable) return;
+    let nextDir: "ASC" | "DESC" = "ASC";
+    if (browserSortColumn === columnName) {
+      nextDir = browserSortDirection === "ASC" ? "DESC" : "ASC";
+    }
+    setBrowserSortColumn(columnName);
+    setBrowserSortDirection(nextDir);
+    setBrowserOffset(0);
+    fetchBrowserRows(selectedDbForBrowser.id, activeBrowserTable, {
+      filters: browserFilters,
+      sortColumn: columnName,
+      sortDirection: nextDir,
+      limit: browserLimit,
+      offset: 0
+    });
+  };
+
+  const handleBrowserPageChange = (newOffset: number) => {
+    if (!selectedDbForBrowser || !activeBrowserTable) return;
+    setBrowserOffset(newOffset);
+    fetchBrowserRows(selectedDbForBrowser.id, activeBrowserTable, {
+      filters: browserFilters,
+      sortColumn: browserSortColumn,
+      sortDirection: browserSortDirection,
+      limit: browserLimit,
+      offset: newOffset
+    });
+  };
+
+  const handleBrowserLimitChange = (newLimit: number) => {
+    if (!selectedDbForBrowser || !activeBrowserTable) return;
+    setBrowserLimit(newLimit);
+    setBrowserOffset(0);
+    fetchBrowserRows(selectedDbForBrowser.id, activeBrowserTable, {
+      filters: browserFilters,
+      sortColumn: browserSortColumn,
+      sortDirection: browserSortDirection,
+      limit: newLimit,
+      offset: 0
+    });
+  };
+
+  const handleApplyBrowserFilters = () => {
+    if (!selectedDbForBrowser || !activeBrowserTable) return;
+    const validFilters = browserFilters.filter(f => f.column && f.operator && (f.operator.includes("null") || f.value !== ""));
+    setBrowserOffset(0);
+    fetchBrowserRows(selectedDbForBrowser.id, activeBrowserTable, {
+      filters: validFilters,
+      sortColumn: browserSortColumn,
+      sortDirection: browserSortDirection,
+      limit: browserLimit,
+      offset: 0
+    });
   };
 
   // Backups helper
@@ -1939,6 +2116,22 @@ export default function DashboardPage() {
                           <>
                             <button 
                               onClick={() => {
+                                setSelectedDbForBrowser(db);
+                                fetchBrowserTables(db.id);
+                              }} 
+                              className="btn btn-secondary btn-icon" 
+                              style={{ width: "30px", height: "30px" }} 
+                              title="Datenbank-Inhalt durchsuchen"
+                            >
+                              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                                <line x1="9" y1="3" x2="9" y2="21"></line>
+                                <line x1="3" y1="9" x2="21" y2="9"></line>
+                                <line x1="3" y1="15" x2="21" y2="15"></line>
+                              </svg>
+                            </button>
+                            <button 
+                              onClick={() => {
                                 setSelectedDbForBackups(db);
                                 fetchBackups(db.id);
                               }} 
@@ -3006,6 +3199,490 @@ export default function DashboardPage() {
               >
                 Schließen
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* PostgreSQL Database Browser Modal */}
+      {selectedDbForBrowser && (
+        <div style={{
+          position: "fixed",
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: "rgba(0, 0, 0, 0.75)",
+          backdropFilter: "blur(8px)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          zIndex: 9999,
+          animation: "fadeIn 0.2s ease-out"
+        }}>
+          <div className="glass-panel" style={{
+            width: "95%",
+            maxWidth: "1280px",
+            height: "90vh",
+            padding: "1.5rem",
+            display: "flex",
+            flexDirection: "column",
+            gap: "1rem"
+          }}>
+            {/* Modal Header */}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid var(--border-glass)", paddingBottom: "0.75rem" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+                <div style={{
+                  backgroundColor: "var(--primary-glow)",
+                  border: "1px solid var(--primary)",
+                  borderRadius: "6px",
+                  padding: "0.35rem"
+                }}>
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                    <line x1="9" y1="3" x2="9" y2="21"></line>
+                    <line x1="3" y1="9" x2="21" y2="9"></line>
+                    <line x1="3" y1="15" x2="21" y2="15"></line>
+                  </svg>
+                </div>
+                <div>
+                  <h3 style={{ fontSize: "1.25rem", fontWeight: 700, color: "#fff", display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                    Datenbank-Browser: {selectedDbForBrowser.alias}
+                  </h3>
+                  <span style={{ fontSize: "0.8rem", color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
+                    {selectedDbForBrowser.type.toUpperCase()} &bull; {selectedDbForBrowser.host}:{selectedDbForBrowser.port}/{selectedDbForBrowser.database} (Schema: {selectedDbForBrowser.schema || "public"})
+                  </span>
+                </div>
+              </div>
+              <button 
+                onClick={() => setSelectedDbForBrowser(null)} 
+                className="btn btn-secondary btn-icon" 
+                style={{ width: "30px", height: "30px", borderRadius: "50%" }}
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Modal Content Columns */}
+            <div style={{ display: "flex", flex: 1, overflow: "hidden", gap: "1rem", minHeight: 0 }}>
+              {/* Sidebar: Table list */}
+              <div style={{
+                width: "260px",
+                borderRight: "1px solid var(--border-glass)",
+                paddingRight: "1rem",
+                display: "flex",
+                flexDirection: "column",
+                gap: "0.75rem",
+                overflow: "hidden"
+              }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
+                  <label className="input-label" style={{ fontSize: "0.8rem" }}>Tabellen filtern</label>
+                  <input 
+                    type="text" 
+                    placeholder="Suchen..." 
+                    value={browserTableSearch} 
+                    onChange={e => setBrowserTableSearch(e.target.value)} 
+                    className="input-field"
+                    style={{ padding: "0.4rem 0.6rem", fontSize: "0.85rem" }}
+                  />
+                </div>
+
+                <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+                  {isBrowserTablesLoading ? (
+                    <div style={{ display: "flex", justifyContent: "center", padding: "2rem" }}>
+                      <svg className="spinner" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" strokeWidth="3"><circle cx="12" cy="12" r="10" strokeDasharray="30 15"></circle></svg>
+                    </div>
+                  ) : browserTables.length === 0 ? (
+                    <span style={{ fontSize: "0.85rem", color: "var(--text-muted)", fontStyle: "italic", padding: "0.5rem" }}>Keine Tabellen gefunden</span>
+                  ) : (
+                    browserTables
+                      .filter(t => t.name.toLowerCase().includes(browserTableSearch.toLowerCase()))
+                      .map(t => {
+                        const isActive = activeBrowserTable === t.name;
+                        return (
+                          <button
+                            key={t.name}
+                            type="button"
+                            onClick={() => selectBrowserTable(selectedDbForBrowser.id, t.name)}
+                            style={{
+                              textAlign: "left",
+                              padding: "0.5rem 0.75rem",
+                              borderRadius: "6px",
+                              backgroundColor: isActive ? "rgba(59, 130, 246, 0.15)" : "transparent",
+                              border: isActive ? "1px solid var(--primary)" : "1px solid transparent",
+                              color: isActive ? "#fff" : "var(--text-secondary)",
+                              cursor: "pointer",
+                              fontSize: "0.85rem",
+                              fontWeight: isActive ? 600 : 400,
+                              display: "flex",
+                              justifyContent: "space-between",
+                              alignItems: "center",
+                              transition: "var(--transition-fast)"
+                            }}
+                          >
+                            <span style={{ textOverflow: "ellipsis", overflow: "hidden", whiteSpace: "nowrap", flex: 1 }} title={t.name}>
+                              {t.name}
+                            </span>
+                            <span style={{
+                              fontSize: "0.7rem",
+                              backgroundColor: isActive ? "rgba(59,130,246,0.2)" : "rgba(255,255,255,0.05)",
+                              padding: "0.1rem 0.35rem",
+                              borderRadius: "4px",
+                              color: "var(--text-muted)",
+                              marginLeft: "0.5rem"
+                            }}>
+                              {t.columnCount}
+                            </span>
+                          </button>
+                        );
+                      })
+                  )}
+                </div>
+              </div>
+
+              {/* Main Panel: Rows and filters */}
+              <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minWidth: 0 }}>
+                {!activeBrowserTable ? (
+                  <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "0.75rem", color: "var(--text-muted)" }}>
+                    <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                      <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                      <line x1="9" y1="3" x2="9" y2="21"></line>
+                      <line x1="3" y1="9" x2="21" y2="9"></line>
+                      <line x1="3" y1="15" x2="21" y2="15"></line>
+                    </svg>
+                    <span style={{ fontSize: "0.95rem" }}>Wähle eine Tabelle aus der Liste links aus, um den Inhalt anzuzeigen.</span>
+                  </div>
+                ) : (
+                  <>
+                    {/* Toolbar & Filters */}
+                    <div style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: "0.75rem",
+                      backgroundColor: "rgba(255,255,255,0.02)",
+                      border: "1px solid var(--border-glass)",
+                      borderRadius: "8px",
+                      padding: "0.75rem",
+                      marginBottom: "1rem"
+                    }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <span style={{ fontSize: "0.85rem", fontWeight: 600, color: "var(--text-primary)" }}>Filter & Abfrage-Kriterien</span>
+                        <button
+                          type="button"
+                          onClick={() => setBrowserFilters([...browserFilters, { column: browserColumns[0]?.name || "", operator: "=", value: "" }])}
+                          className="btn btn-secondary"
+                          style={{ padding: "0.3rem 0.6rem", fontSize: "0.75rem", display: "flex", alignItems: "center", gap: "0.25rem" }}
+                        >
+                          <span>+ Filter hinzufügen</span>
+                        </button>
+                      </div>
+
+                      {browserFilters.length > 0 && (
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", maxHeight: "120px", overflowY: "auto", paddingRight: "0.25rem" }}>
+                          {browserFilters.map((f, idx) => (
+                            <div key={idx} style={{ display: "flex", alignItems: "center", gap: "0.35rem", backgroundColor: "rgba(255,255,255,0.04)", border: "1px solid var(--border-glass)", padding: "0.25rem 0.5rem", borderRadius: "6px" }}>
+                              <select
+                                value={f.column}
+                                onChange={e => {
+                                  const updated = [...browserFilters];
+                                  updated[idx].column = e.target.value;
+                                  setBrowserFilters(updated);
+                                }}
+                                className="input-field"
+                                style={{ padding: "0.2rem 0.4rem", fontSize: "0.8rem", width: "120px", background: "#090b0f" }}
+                              >
+                                {browserColumns.map(col => (
+                                  <option key={col.name} value={col.name}>{col.name}</option>
+                                ))}
+                              </select>
+
+                              <select
+                                value={f.operator}
+                                onChange={e => {
+                                  const updated = [...browserFilters];
+                                  updated[idx].operator = e.target.value;
+                                  setBrowserFilters(updated);
+                                }}
+                                className="input-field"
+                                style={{ padding: "0.2rem 0.4rem", fontSize: "0.8rem", width: "110px", background: "#090b0f" }}
+                              >
+                                <option value="=">=</option>
+                                <option value="!=">!=</option>
+                                <option value="ilike">enthält (case-insensitive)</option>
+                                <option value="like">enthält (case-sensitive)</option>
+                                <option value=">">&gt;</option>
+                                <option value="<">&lt;</option>
+                                <option value=">=">&gt;=</option>
+                                <option value="<=">&lt;=</option>
+                                <option value="is_null">ist NULL</option>
+                                <option value="is_not_null">ist nicht NULL</option>
+                              </select>
+
+                              {!f.operator.includes("null") && (
+                                <input
+                                  type="text"
+                                  placeholder="Wert..."
+                                  value={f.value}
+                                  onChange={e => {
+                                    const updated = [...browserFilters];
+                                    updated[idx].value = e.target.value;
+                                    setBrowserFilters(updated);
+                                  }}
+                                  className="input-field"
+                                  style={{ padding: "0.2rem 0.4rem", fontSize: "0.8rem", width: "120px" }}
+                                />
+                              )}
+
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const updated = browserFilters.filter((_, fIdx) => fIdx !== idx);
+                                  setBrowserFilters(updated);
+                                }}
+                                style={{
+                                  background: "none",
+                                  border: "none",
+                                  color: "var(--danger)",
+                                  cursor: "pointer",
+                                  fontSize: "0.95rem",
+                                  padding: "0 0.25rem",
+                                  lineHeight: 1
+                                }}
+                              >
+                                ✕
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderTop: "1px solid var(--border-glass)", paddingTop: "0.5rem" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                          <button
+                            type="button"
+                            onClick={handleApplyBrowserFilters}
+                            className="btn btn-primary"
+                            style={{ padding: "0.4rem 0.8rem", fontSize: "0.8rem" }}
+                          >
+                            Filter anwenden
+                          </button>
+                          {browserFilters.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setBrowserFilters([]);
+                                setBrowserOffset(0);
+                                fetchBrowserRows(selectedDbForBrowser.id, activeBrowserTable, {
+                                  filters: [],
+                                  sortColumn: browserSortColumn,
+                                  sortDirection: browserSortDirection,
+                                  limit: browserLimit,
+                                  offset: 0
+                                });
+                              }}
+                              className="btn btn-secondary"
+                              style={{ padding: "0.4rem 0.8rem", fontSize: "0.8rem" }}
+                            >
+                              Filter zurücksetzen
+                            </button>
+                          )}
+                        </div>
+
+                        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                          <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>Zeilen pro Seite:</span>
+                          <select
+                            value={browserLimit}
+                            onChange={e => handleBrowserLimitChange(Number(e.target.value))}
+                            className="input-field"
+                            style={{ padding: "0.25rem 0.5rem", fontSize: "0.8rem", width: "70px", background: "#090b0f" }}
+                          >
+                            <option value={20}>20</option>
+                            <option value={50}>50</option>
+                            <option value={100}>100</option>
+                            <option value={200}>200</option>
+                          </select>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Table View panel */}
+                    <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", border: "1px solid var(--border-glass)", borderRadius: "8px", position: "relative", minHeight: 0 }}>
+                      {isBrowserDataLoading && (
+                        <div style={{
+                          position: "absolute",
+                          top: 0,
+                          left: 0,
+                          right: 0,
+                          bottom: 0,
+                          backgroundColor: "rgba(9, 11, 15, 0.6)",
+                          zIndex: 10,
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          backdropFilter: "blur(2px)"
+                        }}>
+                          <svg className="spinner" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" strokeWidth="2.5"><circle cx="12" cy="12" r="10" strokeDasharray="30 15"></circle></svg>
+                        </div>
+                      )}
+
+                      <div style={{ flex: 1, overflow: "auto" }}>
+                        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem", textAlign: "left" }}>
+                          <thead style={{
+                            position: "sticky",
+                            top: 0,
+                            backgroundColor: "var(--bg-surface-opaque)",
+                            borderBottom: "2px solid var(--border-glass)",
+                            zIndex: 2
+                          }}>
+                            <tr>
+                              {browserColumns.map(col => {
+                                const isSorted = browserSortColumn === col.name;
+                                return (
+                                  <th
+                                    key={col.name}
+                                    onClick={() => handleBrowserSort(col.name)}
+                                    style={{
+                                      padding: "0.75rem 1rem",
+                                      fontWeight: 600,
+                                      color: col.isPrimaryKey ? "var(--warning)" : "var(--text-primary)",
+                                      cursor: "pointer",
+                                      userSelect: "none",
+                                      whiteSpace: "nowrap",
+                                      borderBottom: "1px solid var(--border-glass)"
+                                    }}
+                                    title={`${col.name} (${col.dataType}) ${col.isPrimaryKey ? '[PK]' : ''}`}
+                                  >
+                                    <div style={{ display: "flex", alignItems: "center", gap: "0.25rem" }}>
+                                      {col.isPrimaryKey && <span style={{ color: "var(--warning)" }} title="Primary Key">🔑 </span>}
+                                      <span>{col.name}</span>
+                                      <span style={{ fontSize: "0.7rem", color: "var(--text-muted)", fontWeight: 400 }}>({col.dataType})</span>
+                                      {isSorted && (
+                                        <span style={{ color: "var(--primary)", marginLeft: "0.25rem" }}>
+                                          {browserSortDirection === "ASC" ? "▲" : "▼"}
+                                        </span>
+                                      )}
+                                    </div>
+                                  </th>
+                                );
+                              })}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {browserRows.length === 0 ? (
+                              <tr>
+                                <td colSpan={browserColumns.length} style={{ padding: "2rem", color: "var(--text-muted)", textAlign: "center" }}>
+                                  Keine Zeilen in dieser Tabelle gefunden
+                                </td>
+                              </tr>
+                            ) : (
+                              browserRows.map((row, rIdx) => (
+                                <tr
+                                  key={rIdx}
+                                  style={{
+                                    backgroundColor: rIdx % 2 === 1 ? "rgba(255, 255, 255, 0.01)" : "transparent",
+                                    borderBottom: "1px solid var(--border-glass)",
+                                  }}
+                                >
+                                  {browserColumns.map(col => {
+                                    const val = row[col.name];
+                                    let formattedVal = "";
+                                    let isNull = false;
+                                    let cellStyle: React.CSSProperties = {
+                                      padding: "0.6rem 1rem",
+                                      verticalAlign: "top",
+                                      maxWidth: "300px",
+                                      overflow: "hidden",
+                                      textOverflow: "ellipsis",
+                                      whiteSpace: "nowrap"
+                                    };
+
+                                    if (val === null || val === undefined) {
+                                      formattedVal = "NULL";
+                                      isNull = true;
+                                    } else if (typeof val === "boolean") {
+                                      formattedVal = val ? "true" : "false";
+                                    } else if (typeof val === "object") {
+                                      formattedVal = JSON.stringify(val);
+                                    } else {
+                                      formattedVal = String(val);
+                                    }
+
+                                    return (
+                                      <td 
+                                        key={col.name} 
+                                        style={cellStyle}
+                                        title={formattedVal}
+                                      >
+                                        {isNull ? (
+                                          <span style={{ color: "var(--text-muted)", fontStyle: "italic", fontSize: "0.75rem" }}>NULL</span>
+                                        ) : typeof val === "boolean" ? (
+                                          <span style={{
+                                            fontSize: "0.75rem",
+                                            padding: "0.1rem 0.35rem",
+                                            borderRadius: "4px",
+                                            fontWeight: 600,
+                                            backgroundColor: val ? "var(--success-glow)" : "var(--danger-glow)",
+                                            color: val ? "var(--success)" : "var(--danger)",
+                                            border: val ? "1px solid rgba(16, 185, 129, 0.2)" : "1px solid rgba(239, 68, 68, 0.2)"
+                                          }}>
+                                            {formattedVal}
+                                          </span>
+                                        ) : typeof val === "object" ? (
+                                          <span style={{ fontFamily: "var(--font-mono)", fontSize: "0.75rem", color: "var(--secondary)" }}>
+                                            {formattedVal}
+                                          </span>
+                                        ) : (
+                                          <span style={{ color: col.isPrimaryKey ? "var(--text-primary)" : "var(--text-secondary)" }}>
+                                            {formattedVal}
+                                          </span>
+                                        )}
+                                      </td>
+                                    );
+                                  })}
+                                </tr>
+                              ))
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+
+                    {/* Pagination Controls */}
+                    <div style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      borderTop: "1px solid var(--border-glass)",
+                      paddingTop: "0.75rem",
+                      marginTop: "0.5rem"
+                    }}>
+                      <span style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>
+                        Einträge {browserRows.length === 0 ? 0 : browserOffset + 1} bis {browserOffset + browserRows.length} von {browserTotalCount}
+                      </span>
+
+                      <div style={{ display: "flex", gap: "0.5rem" }}>
+                        <button
+                          type="button"
+                          onClick={() => handleBrowserPageChange(browserOffset - browserLimit)}
+                          disabled={browserOffset === 0}
+                          className="btn btn-secondary"
+                          style={{ padding: "0.35rem 0.75rem", fontSize: "0.8rem" }}
+                        >
+                          &larr; Zurück
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleBrowserPageChange(browserOffset + browserLimit)}
+                          disabled={browserOffset + browserLimit >= browserTotalCount}
+                          className="btn btn-secondary"
+                          style={{ padding: "0.35rem 0.75rem", fontSize: "0.8rem" }}
+                        >
+                          Weiter &rarr;
+                        </button>
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
             </div>
           </div>
         </div>
