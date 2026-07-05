@@ -7,7 +7,9 @@ import {
   readStore, 
   writeStore,
   getDiscoveredProjects, 
-  buildDatabaseUrl 
+  buildDatabaseUrl,
+  DatabaseConfig,
+  DatabaseUser
 } from "@/lib/resource-store";
 import { 
   backupDatabase, 
@@ -111,10 +113,10 @@ function ensureMigrationLock(projectPath: string) {
   }
 }
 
-async function ensureShadowDatabase(dbConfig: any, shadowDbName: string) {
+async function ensureShadowDatabase(dbConfig: DatabaseConfig, shadowDbName: string) {
   if (dbConfig.type !== "postgres") return;
   
-  const selectedUser = dbConfig.superuser || dbConfig.users?.find((u: any) => u.username === "postgres" || u.username === "admin") || dbConfig.users?.[0];
+  const selectedUser = dbConfig.superuser || dbConfig.users?.find((u: DatabaseUser) => u.username === "postgres" || u.username === "admin") || dbConfig.users?.[0];
   
   const client = new Client({
     host: dbConfig.host,
