@@ -174,7 +174,7 @@ export default function DashboardPage() {
   const [browserTotalCount, setBrowserTotalCount] = useState(0);
   const [browserLimit, setBrowserLimit] = useState(50);
   const [browserOffset, setBrowserOffset] = useState(0);
-  const [browserFilters, setBrowserFilters] = useState<{ column: string; operator: string; value: unknown }[]>([]);
+  const [browserFilters, setBrowserFilters] = useState<{ column: string; operator: string; value: string }[]>([]);
   const [browserSortColumn, setBrowserSortColumn] = useState<string | null>(null);
   const [browserSortDirection, setBrowserSortDirection] = useState<"ASC" | "DESC">("ASC");
   const [isBrowserTablesLoading, setIsBrowserTablesLoading] = useState(false);
