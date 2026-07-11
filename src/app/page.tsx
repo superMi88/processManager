@@ -732,6 +732,33 @@ export default function DashboardPage() {
     }
   };
 
+  const handleSecureDomain = async (id: string, domain: string) => {
+    setDomainError(null);
+    setDomainWarning(null);
+    setActionInProgress(prev => ({ ...prev, [`secure-dom-${id}`]: true }));
+
+    try {
+      const response = await fetch("/api/manager/domains", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "secure", id })
+      });
+
+      const data = await response.json();
+      if (response.ok && data.success) {
+        alert(`SSL für '${domain}' erfolgreich aktiviert!`);
+        fetchDomains();
+      } else {
+        setDomainError(data.error || "Fehler beim Aktivieren von SSL.");
+      }
+    } catch (err) {
+      console.error(err);
+      setDomainError("Verbindungsfehler beim Aktivieren von SSL.");
+    } finally {
+      setActionInProgress(prev => ({ ...prev, [`secure-dom-${id}`]: false }));
+    }
+  };
+
   const handleManualNginxReload = async () => {
     setDomainError(null);
     setDomainWarning(null);
@@ -3299,9 +3326,19 @@ export default function DashboardPage() {
                               ● Aktiviert
                             </span>
                           ) : (
-                            <span style={{ color: "var(--text-muted)" }}>
-                              ○ Inaktiv
-                            </span>
+                            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                              <span style={{ color: "var(--text-muted)", fontSize: "0.85rem" }}>
+                                ○ Inaktiv
+                              </span>
+                              <button
+                                onClick={() => handleSecureDomain(dom.id, dom.domain)}
+                                disabled={actionInProgress[`secure-dom-${dom.id}`]}
+                                className="btn"
+                                style={{ padding: "0.2rem 0.4rem", fontSize: "0.75rem", background: "var(--secondary-glow)", color: "var(--secondary)", border: "1px solid rgba(168, 85, 247, 0.15)" }}
+                              >
+                                {actionInProgress[`secure-dom-${dom.id}`] ? "Aktivierung..." : "Absichern"}
+                              </button>
+                            </div>
                           )}
                         </td>
                         <td>

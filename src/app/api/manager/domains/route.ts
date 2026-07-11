@@ -91,6 +91,46 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: true });
     }
 
+    // Support securing an existing domain
+    if (action === "secure") {
+      const { id } = body;
+      if (!id) {
+        return NextResponse.json({ error: "Fehlende Domain-ID." }, { status: 400 });
+      }
+
+      const domainObj = (store.domains || []).find(d => d.id === id);
+      if (!domainObj) {
+        return NextResponse.json({ error: "Domain nicht gefunden." }, { status: 404 });
+      }
+
+      const configDir = resolveNginxConfigDir();
+      if (!configDir) {
+        return NextResponse.json({ error: "Nginx-Konfigurationsordner nicht gefunden. Absicherung nicht möglich." }, { status: 400 });
+      }
+
+      const certbotResult = await runCertbot(domainObj.domain);
+      if (!certbotResult.success) {
+        return NextResponse.json({ 
+          error: `Certbot SSL-Registrierung fehlgeschlagen: ${certbotResult.error}` 
+        }, { status: 500 });
+      }
+
+      // Update domain in store
+      store.domains = (store.domains || []).map(d => {
+        if (d.id === id) {
+          return { ...d, sslEnabled: true };
+        }
+        return d;
+      });
+
+      const success = writeStore(store);
+      if (!success) {
+        return NextResponse.json({ error: "Fehlers beim Speichern im Store." }, { status: 500 });
+      }
+
+      return NextResponse.json({ success: true });
+    }
+
     // Standard domain registration validation
     if (!domain || !targetType || !targetValue) {
       return NextResponse.json({ error: "Fehlende Pflichtangaben (domain, targetType, targetValue)" }, { status: 400 });
