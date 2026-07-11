@@ -54,6 +54,11 @@ server {
     listen 80;
     server_name ${domain};
 
+    location /.well-known/acme-challenge/ {
+        default_type "text/plain";
+        root /var/www/html;
+    }
+
     location / {
         proxy_pass http://127.0.0.1:${port};
         proxy_http_version 1.1;
