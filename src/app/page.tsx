@@ -3186,7 +3186,7 @@ export default function DashboardPage() {
                     style={{ cursor: "pointer", width: "16px", height: "16px" }}
                   />
                   <label htmlFor="sslEnabled" style={{ fontSize: "0.9rem", color: "var(--text-primary)", cursor: "pointer" }}>
-                    Mit Let's Encrypt SSL absichern
+                    Mit Let&apos;s Encrypt SSL absichern
                   </label>
                 </div>
                 {domainSslEnabled && (
@@ -3259,7 +3259,7 @@ export default function DashboardPage() {
                     <th>Domain</th>
                     <th>Ziel-Typ</th>
                     <th>Ziel / Port</th>
-                    <th>SSL (Let's Encrypt)</th>
+                    <th>SSL (Let&apos;s Encrypt)</th>
                     <th>Erstellt am</th>
                     <th>Aktionen</th>
                   </tr>

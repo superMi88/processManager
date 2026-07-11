@@ -22,7 +22,7 @@ export function resolveNginxConfigDir(): string | null {
         if (stat.isDirectory()) {
           return p;
         }
-      } catch (e) {
+      } catch {
         // ignore errors reading directory info
       }
     }
@@ -36,7 +36,7 @@ export function resolveNginxConfigDir(): string | null {
         if (stat.isDirectory()) {
           return envPath;
         }
-      } catch (e) {
+      } catch {
         // ignore
       }
     }
