@@ -84,6 +84,15 @@ interface DiscoveredProject {
   hasMigrations?: boolean;
 }
 
+interface RegisteredDomain {
+  id: string;
+  domain: string;
+  targetType: "port" | "project";
+  targetValue: string;
+  sslEnabled: boolean;
+  createdAt: string;
+}
+
 
 export default function DashboardPage() {
   const [processes, setProcesses] = useState<ProcessInfo[]>([]);
@@ -99,7 +108,7 @@ export default function DashboardPage() {
   const router = useRouter();
   const consoleRef = useRef<HTMLDivElement>(null);
 
-  const [activeTab, setActiveTab] = useState<"dashboard" | "databases" | "keys" | "projects">("dashboard");
+  const [activeTab, setActiveTab] = useState<"dashboard" | "databases" | "keys" | "projects" | "domains">("dashboard");
   const [registeredDbs, setRegisteredDbs] = useState<RegisteredDatabase[]>([]);
   const [registeredCreds, setRegisteredCreds] = useState<RegisteredCredential[]>([]);
   const [discoveredProjects, setDiscoveredProjects] = useState<DiscoveredProject[]>([]);
@@ -107,6 +116,20 @@ export default function DashboardPage() {
   const [isProjectsLoading, setIsProjectsLoading] = useState(true);
   const [scannedPorts, setScannedPorts] = useState<{ port: number; inUse: boolean; registered: boolean; alias: string | null; credentialId: string | null; projectName: string | null }[]>([]);
   const [isPortsLoading, setIsPortsLoading] = useState(false);
+
+  const [registeredDomains, setRegisteredDomains] = useState<RegisteredDomain[]>([]);
+  const [isDomainsLoading, setIsDomainsLoading] = useState(false);
+  const [nginxConfigDir, setNginxConfigDir] = useState("");
+  const [nginxReloadCommand, setNginxReloadCommand] = useState("");
+  
+  // Form state for domains
+  const [domainName, setDomainName] = useState("");
+  const [domainTargetType, setDomainTargetType] = useState<"port" | "project">("project");
+  const [domainTargetValue, setDomainTargetValue] = useState(""); // project name or port
+  const [domainSslEnabled, setDomainSslEnabled] = useState(false);
+  const [domainFormSubmitting, setDomainFormSubmitting] = useState(false);
+  const [domainWarning, setDomainWarning] = useState<string | null>(null);
+  const [domainError, setDomainError] = useState<string | null>(null);
   
   // Google Key Form states
   const [googleAlias, setGoogleAlias] = useState("");
@@ -600,6 +623,140 @@ export default function DashboardPage() {
       setIsPortsLoading(false);
     }
   }, []);
+
+  const fetchDomains = useCallback(async () => {
+    setIsDomainsLoading(true);
+    setDomainError(null);
+    try {
+      const response = await fetch("/api/manager/domains");
+      if (response.ok) {
+        const data = await response.json();
+        setRegisteredDomains(data.domains || []);
+        setNginxConfigDir(data.configDir || "");
+        setNginxReloadCommand(data.reloadCommand || "");
+      } else {
+        const data = await response.json();
+        setDomainError(data.error || "Fehler beim Laden der Domains");
+      }
+    } catch (error) {
+      console.error("Error fetching domains:", error);
+      setDomainError("Verbindungsfehler beim Laden der Domains.");
+    } finally {
+      setIsDomainsLoading(false);
+    }
+  }, []);
+
+  const handleRegisterDomain = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!domainName) {
+      setDomainError("Domain-Name darf nicht leer sein.");
+      return;
+    }
+    if (domainTargetType === "project" && !domainTargetValue) {
+      setDomainError("Bitte wählen Sie ein Projekt aus.");
+      return;
+    }
+    if (domainTargetType === "port" && !domainTargetValue) {
+      setDomainError("Bitte geben Sie einen Port ein.");
+      return;
+    }
+
+    setDomainFormSubmitting(true);
+    setDomainError(null);
+    setDomainWarning(null);
+
+    try {
+      const response = await fetch("/api/manager/domains", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          domain: domainName,
+          targetType: domainTargetType,
+          targetValue: domainTargetValue,
+          sslEnabled: domainSslEnabled
+        })
+      });
+
+      const data = await response.json();
+      if (response.ok && data.success) {
+        // Clear form
+        setDomainName("");
+        setDomainTargetValue("");
+        setDomainSslEnabled(false);
+        
+        // Show warning if any
+        if (data.warning) {
+          setDomainWarning(data.warning);
+        }
+        
+        fetchDomains();
+      } else {
+        setDomainError(data.error || "Fehler beim Registrieren der Domain.");
+      }
+    } catch (err) {
+      console.error(err);
+      setDomainError("Verbindungsfehler beim Registrieren der Domain.");
+    } finally {
+      setDomainFormSubmitting(false);
+    }
+  };
+
+  const handleDeleteDomain = async (id: string, domain: string) => {
+    if (!confirm(`Möchten Sie die Domain '${domain}' wirklich löschen?`)) {
+      return;
+    }
+
+    setDomainError(null);
+    setDomainWarning(null);
+    setActionInProgress(prev => ({ ...prev, [`delete-dom-${id}`]: true }));
+
+    try {
+      const response = await fetch(`/api/manager/domains?id=${id}`, {
+        method: "DELETE"
+      });
+
+      const data = await response.json();
+      if (response.ok && data.success) {
+        if (data.warning) {
+          setDomainWarning(data.warning);
+        }
+        fetchDomains();
+      } else {
+        setDomainError(data.error || "Fehler beim Löschen der Domain.");
+      }
+    } catch (err) {
+      console.error(err);
+      setDomainError("Verbindungsfehler beim Löschen der Domain.");
+    } finally {
+      setActionInProgress(prev => ({ ...prev, [`delete-dom-${id}`]: false }));
+    }
+  };
+
+  const handleManualNginxReload = async () => {
+    setDomainError(null);
+    setDomainWarning(null);
+    setActionInProgress(prev => ({ ...prev, "nginx-reload": true }));
+
+    try {
+      const response = await fetch("/api/manager/domains", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "reload" })
+      });
+
+      const data = await response.json();
+      if (response.ok && data.success) {
+        alert("Nginx erfolgreich neu geladen!");
+      } else {
+        setDomainError(data.error || "Nginx-Reload fehlgeschlagen.");
+      }
+    } catch (err) {
+      console.error(err);
+      setDomainError("Verbindungsfehler beim Neuladen von Nginx.");
+    } finally {
+      setActionInProgress(prev => ({ ...prev, "nginx-reload": false }));
+    }
+  };
 
   // Save Google Key
   const handleSaveGoogleKey = async (e: React.FormEvent) => {
@@ -1166,6 +1323,7 @@ export default function DashboardPage() {
       await fetchResources();
       await fetchProjects();
       await fetchPorts(false);
+      await fetchDomains();
     };
     initializeDashboard();
 
@@ -1181,7 +1339,7 @@ export default function DashboardPage() {
       clearInterval(processInterval);
       clearInterval(dbInterval);
     };
-  }, [fetchSession, fetchProcesses, fetchDatabases, fetchResources, fetchProjects, fetchPorts]);
+  }, [fetchSession, fetchProcesses, fetchDatabases, fetchResources, fetchProjects, fetchPorts, fetchDomains]);
 
   useEffect(() => {
     if (activeTab !== "keys") return;
@@ -1385,6 +1543,18 @@ export default function DashboardPage() {
           className={`${styles.tabButton} ${activeTab === "projects" ? styles.tabButtonActive : ""}`}
         >
           Projekte
+        </button>
+        <button 
+          onClick={() => {
+            setActiveTab("domains");
+            fetchDomains();
+            fetchProjects();
+            fetchResources();
+            fetchPorts();
+          }} 
+          className={`${styles.tabButton} ${activeTab === "domains" ? styles.tabButtonActive : ""}`}
+        >
+          Domains
         </button>
       </div>
 
@@ -2915,6 +3085,248 @@ export default function DashboardPage() {
           )}
         </div>
       )}
+
+      {/* Tab: Domains & Nginx Reverse Proxy */}
+      {activeTab === "domains" && (
+        <div className="layout-main" style={{ animation: "fadeIn 0.3s ease-out" }}>
+          <h2 className={styles.sectionTitle} style={{ marginBottom: "1rem" }}>Domains & Reverse Proxy (Nginx)</h2>
+          <p style={{ fontSize: "0.9rem", color: "var(--text-secondary)", marginBottom: "2rem" }}>
+            Hier können Sie Domains registrieren, die automatisch als Reverse-Proxy auf Ihre lokalen PM2-Projekte oder Ports weiterleiten.
+          </p>
+
+          {domainWarning && (
+            <div className="glass-panel" style={{ padding: "1rem 1.5rem", borderLeft: "4px solid var(--warning)", marginBottom: "1.5rem", background: "rgba(245, 158, 11, 0.05)" }}>
+              <strong style={{ color: "var(--warning)" }}>Hinweis:</strong>
+              <p style={{ marginTop: "0.25rem", fontSize: "0.9rem", color: "var(--text-primary)" }}>{domainWarning}</p>
+            </div>
+          )}
+
+          {domainError && (
+            <div className="glass-panel" style={{ padding: "1rem 1.5rem", borderLeft: "4px solid var(--danger)", marginBottom: "1.5rem", background: "rgba(239, 68, 68, 0.05)" }}>
+              <strong style={{ color: "var(--danger)" }}>Fehler:</strong>
+              <p style={{ marginTop: "0.25rem", fontSize: "0.9rem", color: "var(--text-primary)" }}>{domainError}</p>
+            </div>
+          )}
+
+          <div className={styles.settingsGrid} style={{ marginBottom: "3rem" }}>
+            {/* Domain Form Card */}
+            <div className={`${styles.settingsCard} glass-panel`} style={{ padding: "1.5rem" }}>
+              <h3 style={{ fontSize: "1.2rem", fontWeight: 700, marginBottom: "1.5rem", borderBottom: "1px solid var(--border-glass)", paddingBottom: "0.75rem" }}>
+                Domain registrieren
+              </h3>
+              <form onSubmit={handleRegisterDomain} style={{ display: "flex", flexDirection: "column", gap: "1.25rem" }}>
+                <div className="input-group">
+                  <label className="input-label">Domain Name *</label>
+                  <input 
+                    type="text" 
+                    value={domainName} 
+                    onChange={e => setDomainName(e.target.value.trim())} 
+                    placeholder="z. B. app.meinedomain.de" 
+                    className="input-field" 
+                    required 
+                  />
+                </div>
+
+                <div className="input-group">
+                  <label className="input-label">Ziel-Typ *</label>
+                  <select 
+                    value={domainTargetType} 
+                    onChange={e => {
+                      setDomainTargetType(e.target.value as "port" | "project");
+                      setDomainTargetValue("");
+                    }} 
+                    className={styles.selectField}
+                  >
+                    <option value="project">PM2-Projekt (Automatischer Port)</option>
+                    <option value="port">Manuelle Portnummer</option>
+                  </select>
+                </div>
+
+                <div className="input-group">
+                  <label className="input-label">
+                    {domainTargetType === "project" ? "Projekt auswählen *" : "Lokaler Port *"}
+                  </label>
+                  {domainTargetType === "project" ? (
+                    <select
+                      value={domainTargetValue}
+                      onChange={e => setDomainTargetValue(e.target.value)}
+                      className={styles.selectField}
+                      required
+                    >
+                      <option value="">-- Bitte wählen --</option>
+                      {discoveredProjects.map(p => (
+                        <option key={p.name} value={p.name}>{p.name}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input 
+                      type="number" 
+                      value={domainTargetValue} 
+                      onChange={e => setDomainTargetValue(e.target.value)} 
+                      placeholder="z. B. 3000" 
+                      className="input-field" 
+                      min="1"
+                      max="65535"
+                      required 
+                    />
+                  )}
+                  {domainTargetType === "project" && (
+                    <span style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginTop: "0.25rem" }}>
+                      Der Port wird automatisch über die verlinkten Port-Keys des Projekts ermittelt.
+                    </span>
+                  )}
+                </div>
+
+                <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginTop: "0.5rem" }}>
+                  <input 
+                    type="checkbox" 
+                    id="sslEnabled" 
+                    checked={domainSslEnabled} 
+                    onChange={e => setDomainSslEnabled(e.target.checked)} 
+                    style={{ cursor: "pointer", width: "16px", height: "16px" }}
+                  />
+                  <label htmlFor="sslEnabled" style={{ fontSize: "0.9rem", color: "var(--text-primary)", cursor: "pointer" }}>
+                    Mit Let's Encrypt SSL absichern
+                  </label>
+                </div>
+                {domainSslEnabled && (
+                  <span style={{ fontSize: "0.75rem", color: "var(--text-muted)", display: "block" }}>
+                    Erfordert eine installierte Certbot-Umgebung und dass die Domain bereits auf diesen Server zeigt.
+                  </span>
+                )}
+
+                <button 
+                  type="submit" 
+                  disabled={domainFormSubmitting} 
+                  className="btn btn-primary"
+                  style={{ marginTop: "1rem" }}
+                >
+                  {domainFormSubmitting ? "Wird registriert..." : "Domain anlegen"}
+                </button>
+              </form>
+            </div>
+
+            {/* Config & Info Card */}
+            <div className="glass-panel" style={{ padding: "1.5rem" }}>
+              <h3 style={{ fontSize: "1.2rem", fontWeight: 700, marginBottom: "1.5rem", borderBottom: "1px solid var(--border-glass)", paddingBottom: "0.75rem" }}>
+                Nginx Status & Infos
+              </h3>
+              <div style={{ display: "flex", flexDirection: "column", gap: "1rem", fontSize: "0.9rem" }}>
+                <div>
+                  <strong style={{ color: "var(--text-secondary)", display: "block" }}>Nginx-Konfigurationspfad:</strong>
+                  <code style={{ fontSize: "0.8rem", color: "var(--primary)", wordBreak: "break-all" }}>{nginxConfigDir || "Nicht ermittelt"}</code>
+                </div>
+                <div>
+                  <strong style={{ color: "var(--text-secondary)", display: "block" }}>Nginx-Reload-Befehl:</strong>
+                  <code style={{ fontSize: "0.8rem", color: "var(--secondary)" }}>{nginxReloadCommand}</code>
+                </div>
+                <div style={{ borderTop: "1px solid var(--border-glass)", paddingTop: "1rem", marginTop: "0.5rem" }}>
+                  <button 
+                    onClick={handleManualNginxReload}
+                    disabled={actionInProgress["nginx-reload"]}
+                    className="btn"
+                    style={{ width: "100%", justifyContent: "center" }}
+                  >
+                    {actionInProgress["nginx-reload"] ? "Nginx wird neu geladen..." : "Nginx manuell neu laden"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Domains Table Section */}
+          <div className={styles.sectionHeader}>
+            <h3 className={styles.sectionTitle}>Registrierte Domains</h3>
+          </div>
+
+          {isDomainsLoading ? (
+            <div className="glass-panel" style={{ padding: "4rem", textAlign: "center" }}>
+              <svg className="spinner" width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" strokeWidth="2.5"><circle cx="12" cy="12" r="10" strokeDasharray="40 20"></circle></svg>
+              <p style={{ marginTop: "1rem", color: "var(--text-secondary)" }}>Domains werden geladen...</p>
+            </div>
+          ) : registeredDomains.length === 0 ? (
+            <div className="glass-panel" style={{ padding: "4rem", textAlign: "center" }}>
+              <p style={{ color: "var(--text-secondary)", fontSize: "1.1rem" }}>Keine registrierten Domains gefunden.</p>
+              <p style={{ fontSize: "0.85rem", color: "var(--text-muted)", maxWidth: "500px", margin: "1rem auto 0 auto" }}>
+                Legen Sie oben Ihre erste Domain an, um einen Reverse-Proxy zu konfigurieren.
+              </p>
+            </div>
+          ) : (
+            <div className={styles.tableWrapper}>
+              <table className={styles.processTable}>
+                <thead>
+                  <tr>
+                    <th>Domain</th>
+                    <th>Ziel-Typ</th>
+                    <th>Ziel / Port</th>
+                    <th>SSL (Let's Encrypt)</th>
+                    <th>Erstellt am</th>
+                    <th>Aktionen</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {registeredDomains.map(dom => {
+                    const isDeleting = actionInProgress[`delete-dom-${dom.id}`];
+                    return (
+                      <tr key={dom.id}>
+                        <td className={styles.processName}>
+                          <a 
+                            href={`http://${dom.domain}`} 
+                            target="_blank" 
+                            rel="noopener noreferrer"
+                            style={{ color: "var(--primary)", textDecoration: "none" }}
+                          >
+                            {dom.domain}
+                          </a>
+                        </td>
+                        <td>
+                          <span style={{ 
+                            fontSize: "0.8rem", 
+                            padding: "0.2rem 0.5rem", 
+                            borderRadius: "4px",
+                            background: dom.targetType === "project" ? "var(--secondary-glow)" : "rgba(255, 255, 255, 0.05)",
+                            color: dom.targetType === "project" ? "var(--secondary)" : "var(--text-secondary)"
+                          }}>
+                            {dom.targetType === "project" ? "Projekt" : "Manuell"}
+                          </span>
+                        </td>
+                        <td className={styles.monoText}>
+                          {dom.targetValue}
+                        </td>
+                        <td>
+                          {dom.sslEnabled ? (
+                            <span style={{ color: "var(--success)", display: "flex", alignItems: "center", gap: "0.25rem" }}>
+                              ● Aktiviert
+                            </span>
+                          ) : (
+                            <span style={{ color: "var(--text-muted)" }}>
+                              ○ Inaktiv
+                            </span>
+                          )}
+                        </td>
+                        <td>
+                          {new Date(dom.createdAt).toLocaleString("de-DE")}
+                        </td>
+                        <td>
+                          <button
+                            onClick={() => handleDeleteDomain(dom.id, dom.domain)}
+                            disabled={isDeleting}
+                            className="btn btn-danger"
+                            style={{ padding: "0.3rem 0.6rem", fontSize: "0.8rem" }}
+                          >
+                            {isDeleting ? "Wird gelöscht..." : "Löschen"}
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Backup Management Modal */}
       {selectedDbForBackups && (
         <div style={{

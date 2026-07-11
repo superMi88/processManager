@@ -41,10 +41,20 @@ export interface ProjectDeclaration {
   requirements: ProjectRequirement[];
 }
 
+export interface DomainConfig {
+  id: string;
+  domain: string;
+  targetType: "port" | "project";
+  targetValue: string; // port number or project name
+  sslEnabled?: boolean;
+  createdAt: string;
+}
+
 export interface ResourceStore {
   databases: DatabaseConfig[];
   credentials: CredentialConfig[];
   links: Record<string, Record<string, string>>; // projectName -> envKey -> resourceId
+  domains?: DomainConfig[];
 }
 
 const STORE_PATH = path.resolve(process.cwd(), "src/data/resources.json");
@@ -88,12 +98,15 @@ export function readStore(): ResourceStore {
           fs.writeFileSync(STORE_PATH, JSON.stringify(store, null, 2), "utf-8");
         }
       }
+      if (!store.domains) {
+        store.domains = [];
+      }
       return store;
     }
   } catch (error) {
     console.error("Failed to read resources store:", error);
   }
-  return { databases: [], credentials: [], links: {} };
+  return { databases: [], credentials: [], links: {}, domains: [] };
 }
 
 // Helper to save store
