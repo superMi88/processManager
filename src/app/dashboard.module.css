@@ -509,6 +509,24 @@
   color: var(--text-muted);
 }
 
+.inputField {
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 0.9rem;
+  padding: 0.6rem 0.85rem;
+  width: 100%;
+  transition: var(--transition-fast);
+}
+
+.inputField:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-glow);
+}
+
 .selectField {
   background: rgba(0, 0, 0, 0.35);
   border: 1px solid var(--border-glass);

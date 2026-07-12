@@ -31,7 +31,7 @@ export interface CredentialConfig {
 
 export interface ProjectRequirement {
   key: string;
-  type: "database" | "credential";
+  type: "database" | "credential" | "textinput" | "text";
   dbType?: "postgres" | "mongodb";
   description?: string;
 }
@@ -228,6 +228,8 @@ export function generateEnvContent(projectName: string, declaration: ProjectDecl
           const userObj = db.users?.find(u => u.id === selectedUserId) || db.users?.[0];
           value = buildDatabaseUrl(db, userObj);
         }
+      } else if (req.type === "textinput" || req.type === "text") {
+        value = resourceId;
       } else {
         const cred = store.credentials.find(c => c.id === resourceId);
         if (cred) {

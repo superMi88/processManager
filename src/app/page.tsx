@@ -61,7 +61,7 @@ interface RegisteredCredential {
 
 interface ProjectRequirement {
   key: string;
-  type: "database" | "credential";
+  type: "database" | "credential" | "textinput" | "text";
   dbType?: "postgres" | "mongodb";
   description?: string;
 }
@@ -2870,51 +2870,61 @@ export default function DashboardPage() {
                             </td>
                             <td>
                               <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
-                                <select 
-                                  value={currentVal}
-                                  onChange={e => handleLinkChange(proj.name, req.key, e.target.value)}
-                                  className={styles.selectField}
-                                >
-                                  <option value="">-- Nicht verknüpft (Leerwert) --</option>
-                                  {req.type === "database" ? (
-                                    <optgroup label="Datenbanken (Postgres & MongoDB)">
-                                      {registeredDbs
-                                        .filter(db => !req.dbType || db.type === req.dbType)
-                                        .map(db => (
-                                          <option key={db.id} value={db.id}>
-                                            {db.alias} ({db.type})
-                                          </option>
-                                        ))
-                                      }
-                                    </optgroup>
-                                  ) : (
-                                    <>
-                                      {req.key.toUpperCase().includes("PORT") ? (
-                                        <optgroup label="System Ports">
-                                          {registeredCreds
-                                            .filter(cred => cred.type === "port" || cred.key === "PORT" || cred.key.includes("PORT"))
-                                            .map(cred => (
-                                              <option key={cred.id} value={cred.id}>
-                                                {cred.alias} ({cred.value})
-                                              </option>
-                                            ))
-                                          }
-                                        </optgroup>
-                                      ) : (
-                                        <optgroup label="Google API & AI Keys">
-                                          {registeredCreds
-                                            .filter(cred => !(cred.type === "port" || cred.key === "PORT" || cred.key.includes("PORT")))
-                                            .map(cred => (
-                                              <option key={cred.id} value={cred.id}>
-                                                {cred.alias} ({cred.key})
-                                              </option>
-                                            ))
-                                          }
-                                        </optgroup>
-                                      )}
-                                    </>
-                                  )}
-                                </select>
+                                {req.type === "textinput" || req.type === "text" ? (
+                                  <input 
+                                    type="text"
+                                    value={currentVal}
+                                    onChange={e => handleLinkChange(proj.name, req.key, e.target.value)}
+                                    className={styles.inputField || "input-field"}
+                                    placeholder={req.description || `${req.key} eingeben...`}
+                                  />
+                                ) : (
+                                  <select 
+                                    value={currentVal}
+                                    onChange={e => handleLinkChange(proj.name, req.key, e.target.value)}
+                                    className={styles.selectField}
+                                  >
+                                    <option value="">-- Nicht verknüpft (Leerwert) --</option>
+                                    {req.type === "database" ? (
+                                      <optgroup label="Datenbanken (Postgres & MongoDB)">
+                                        {registeredDbs
+                                          .filter(db => !req.dbType || db.type === req.dbType)
+                                          .map(db => (
+                                            <option key={db.id} value={db.id}>
+                                              {db.alias} ({db.type})
+                                            </option>
+                                          ))
+                                        }
+                                      </optgroup>
+                                    ) : (
+                                      <>
+                                        {req.key.toUpperCase().includes("PORT") ? (
+                                          <optgroup label="System Ports">
+                                            {registeredCreds
+                                              .filter(cred => cred.type === "port" || cred.key === "PORT" || cred.key.includes("PORT"))
+                                              .map(cred => (
+                                                <option key={cred.id} value={cred.id}>
+                                                  {cred.alias} ({cred.value})
+                                                </option>
+                                              ))
+                                            }
+                                          </optgroup>
+                                        ) : (
+                                          <optgroup label="Google API & AI Keys">
+                                            {registeredCreds
+                                              .filter(cred => !(cred.type === "port" || cred.key === "PORT" || cred.key.includes("PORT")))
+                                              .map(cred => (
+                                                <option key={cred.id} value={cred.id}>
+                                                  {cred.alias} ({cred.key})
+                                                </option>
+                                              ))
+                                            }
+                                          </optgroup>
+                                        )}
+                                      </>
+                                    )}
+                                  </select>
+                                )}
 
                                 {req.type === "database" && currentVal && (
                                   (() => {

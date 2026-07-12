@@ -19,7 +19,7 @@ function resolveProjectPort(projectName: string, store: ReturnType<typeof readSt
   const proj = discovered.find(p => p.declaration.name === projectName);
   if (!proj) return null;
   
-  // 1. Check mapped credentials to find one with value parsed as port number
+  // 1. Check mapped credentials/textinputs to find one with value parsed as port number
   for (const req of proj.declaration.requirements) {
     if (req.type === "credential") {
       const resourceId = projectLinks[req.key];
@@ -34,10 +34,19 @@ function resolveProjectPort(projectName: string, store: ReturnType<typeof readSt
           }
         }
       }
+    } else if (req.type === "textinput" || req.type === "text") {
+      const val = projectLinks[req.key];
+      if (val) {
+        const isPort = req.key === "PORT" || req.key.includes("PORT");
+        const parsed = parseInt(val, 10);
+        if (isPort && !isNaN(parsed) && parsed > 0) {
+          return parsed;
+        }
+      }
     }
   }
 
-  // 2. Fallback check: check any mapped credential that is a number
+  // 2. Fallback check: check any mapped credential/textinput that is a number
   for (const req of proj.declaration.requirements) {
     if (req.type === "credential") {
       const resourceId = projectLinks[req.key];
@@ -48,6 +57,14 @@ function resolveProjectPort(projectName: string, store: ReturnType<typeof readSt
           if (!isNaN(parsed) && parsed > 0 && parsed < 65536) {
             return parsed;
           }
+        }
+      }
+    } else if (req.type === "textinput" || req.type === "text") {
+      const val = projectLinks[req.key];
+      if (val) {
+        const parsed = parseInt(val, 10);
+        if (!isNaN(parsed) && parsed > 0 && parsed < 65536) {
+          return parsed;
         }
       }
     }
