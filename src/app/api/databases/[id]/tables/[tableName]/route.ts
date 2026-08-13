@@ -9,8 +9,8 @@ export async function GET(
 ) {
   const { id, tableName } = await context.params;
   try {
-    const columns = await getColumns(id, tableName);
-    return NextResponse.json({ success: true, columns });
+    const { columns, tableOwner } = await getColumns(id, tableName);
+    return NextResponse.json({ success: true, columns, tableOwner });
   } catch (error) {
     console.error(`Failed to get columns for table '${tableName}':`, error);
     const errMsg = error instanceof Error ? error.message : String(error);

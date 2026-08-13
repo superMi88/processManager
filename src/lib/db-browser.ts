@@ -3,6 +3,7 @@ import { readStore, buildDatabaseUrl } from "./resource-store";
 
 export interface TableInfo {
   name: string;
+  owner: string;
   columnCount: number;
 }
 
@@ -12,6 +13,11 @@ export interface ColumnMeta {
   isNullable: boolean;
   columnDefault: string | null;
   isPrimaryKey: boolean;
+}
+
+export interface GetColumnsResult {
+  columns: ColumnMeta[];
+  tableOwner: string;
 }
 
 export interface QueryRowsOptions {
@@ -64,26 +70,28 @@ export async function getDbClient(dbId: string): Promise<{ client: Client; schem
 }
 
 /**
- * Retrieve user tables and column counts in the configured schema
+ * Retrieve user tables, owners, and column counts in the configured schema
  */
 export async function getTables(dbId: string): Promise<TableInfo[]> {
   const { client, schema } = await getDbClient(dbId);
   try {
     const query = `
       SELECT 
-        table_name as name,
+        t.tablename as name,
+        t.tableowner as owner,
         (
           SELECT count(*)::int
           FROM information_schema.columns 
-          WHERE table_name = t.table_name AND table_schema = t.table_schema
+          WHERE table_name = t.tablename AND table_schema = t.schemaname
         ) as column_count
-      FROM information_schema.tables t
-      WHERE table_schema = $1 AND table_type = 'BASE TABLE'
-      ORDER BY table_name;
+      FROM pg_tables t
+      WHERE t.schemaname = $1
+      ORDER BY t.tablename;
     `;
     const result = await client.query(query, [schema]);
     return result.rows.map((row) => ({
       name: row.name,
+      owner: row.owner || "unbekannt",
       columnCount: row.column_count,
     }));
   } finally {
@@ -94,19 +102,20 @@ export async function getTables(dbId: string): Promise<TableInfo[]> {
 }
 
 /**
- * Retrieve column metadata for a specific table
+ * Retrieve column metadata and table owner for a specific table
  */
-export async function getColumns(dbId: string, tableName: string): Promise<ColumnMeta[]> {
+export async function getColumns(dbId: string, tableName: string): Promise<GetColumnsResult> {
   const { client, schema } = await getDbClient(dbId);
   try {
-    // 1. Verify table exists to prevent SQL Injection in table names
+    // 1. Verify table exists and fetch table owner to prevent SQL Injection
     const tableCheck = await client.query(
-      "SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = $2 AND table_type = 'BASE TABLE'",
+      "SELECT tableowner FROM pg_tables WHERE schemaname = $1 AND tablename = $2",
       [schema, tableName]
     );
     if (tableCheck.rowCount === 0) {
       throw new Error(`Tabelle '${tableName}' existiert nicht im Schema '${schema}'.`);
     }
+    const tableOwner = tableCheck.rows[0]?.tableowner || "unbekannt";
 
     // 2. Query columns and detect primary keys
     const query = `
@@ -131,13 +140,15 @@ export async function getColumns(dbId: string, tableName: string): Promise<Colum
       ORDER BY c.ordinal_position;
     `;
     const result = await client.query(query, [schema, tableName]);
-    return result.rows.map((row) => ({
+    const columns = result.rows.map((row) => ({
       name: row.name,
       dataType: row.data_type,
       isNullable: row.is_nullable === "YES",
       columnDefault: row.column_default,
       isPrimaryKey: row.is_primary_key,
     }));
+
+    return { columns, tableOwner };
   } finally {
     try {
       await client.end();
@@ -156,7 +167,7 @@ export async function queryRows(
   const { client, schema } = await getDbClient(dbId);
   try {
     // 1. Fetch valid columns to build a safe column lookup list
-    const columns = await getColumns(dbId, tableName);
+    const { columns } = await getColumns(dbId, tableName);
     const columnNames = columns.map((c) => c.name);
 
     const limit = options.limit ? Math.max(1, Math.min(1000, options.limit)) : 50;

@@ -190,8 +190,9 @@ export default function DashboardPage() {
 
   // Database Browser states
   const [selectedDbForBrowser, setSelectedDbForBrowser] = useState<RegisteredDatabase | null>(null);
-  const [browserTables, setBrowserTables] = useState<{ name: string; columnCount: number }[]>([]);
+  const [browserTables, setBrowserTables] = useState<{ name: string; columnCount: number; owner: string }[]>([]);
   const [activeBrowserTable, setActiveBrowserTable] = useState<string | null>(null);
+  const [activeTableOwner, setActiveTableOwner] = useState<string | null>(null);
   const [browserColumns, setBrowserColumns] = useState<{ name: string; dataType: string; isNullable: boolean; columnDefault: string | null; isPrimaryKey: boolean }[]>([]);
   const [browserRows, setBrowserRows] = useState<Record<string, unknown>[]>([]);
   const [browserTotalCount, setBrowserTotalCount] = useState(0);
@@ -250,6 +251,7 @@ export default function DashboardPage() {
     setIsBrowserTablesLoading(true);
     setBrowserTables([]);
     setActiveBrowserTable(null);
+    setActiveTableOwner(null);
     setBrowserColumns([]);
     setBrowserRows([]);
     setBrowserTotalCount(0);
@@ -277,6 +279,7 @@ export default function DashboardPage() {
 
   const selectBrowserTable = async (dbId: string, tableName: string) => {
     setActiveBrowserTable(tableName);
+    setActiveTableOwner(null);
     setBrowserColumns([]);
     setBrowserRows([]);
     setBrowserTotalCount(0);
@@ -291,6 +294,7 @@ export default function DashboardPage() {
       const colData = await colRes.json();
       if (colRes.ok && colData.success) {
         setBrowserColumns(colData.columns || []);
+        setActiveTableOwner(colData.tableOwner || null);
         
         await fetchBrowserRows(dbId, tableName, {
           filters: [],
@@ -3781,18 +3785,23 @@ export default function DashboardPage() {
                               transition: "var(--transition-fast)"
                             }}
                           >
-                            <span style={{ textOverflow: "ellipsis", overflow: "hidden", whiteSpace: "nowrap", flex: 1 }} title={t.name}>
-                              {t.name}
-                            </span>
+                            <div style={{ display: "flex", flexDirection: "column", gap: "0.15rem", overflow: "hidden", flex: 1, paddingRight: "0.5rem" }}>
+                              <span style={{ textOverflow: "ellipsis", overflow: "hidden", whiteSpace: "nowrap" }} title={t.name}>
+                                {t.name}
+                              </span>
+                              <span style={{ fontSize: "0.7rem", color: isActive ? "rgba(255,255,255,0.7)" : "var(--text-muted)", display: "inline-flex", alignItems: "center", gap: "0.25rem" }}>
+                                👤 {t.owner || "unbekannt"}
+                              </span>
+                            </div>
                             <span style={{
                               fontSize: "0.7rem",
                               backgroundColor: isActive ? "rgba(59,130,246,0.2)" : "rgba(255,255,255,0.05)",
                               padding: "0.1rem 0.35rem",
                               borderRadius: "4px",
                               color: "var(--text-muted)",
-                              marginLeft: "0.5rem"
+                              whiteSpace: "nowrap"
                             }}>
-                              {t.columnCount}
+                              {t.columnCount} Spalten
                             </span>
                           </button>
                         );
@@ -3827,7 +3836,25 @@ export default function DashboardPage() {
                       marginBottom: "1rem"
                     }}>
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                        <span style={{ fontSize: "0.85rem", fontWeight: 600, color: "var(--text-primary)" }}>Filter & Abfrage-Kriterien</span>
+                        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+                          <span style={{ fontSize: "0.85rem", fontWeight: 600, color: "var(--text-primary)" }}>Filter & Abfrage-Kriterien</span>
+                          {activeTableOwner && (
+                            <span style={{
+                              fontSize: "0.75rem",
+                              backgroundColor: "rgba(59, 130, 246, 0.12)",
+                              border: "1px solid rgba(59, 130, 246, 0.3)",
+                              color: "var(--primary)",
+                              padding: "0.15rem 0.55rem",
+                              borderRadius: "12px",
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: "0.3rem",
+                              fontWeight: 500
+                            }} title={`Besitzer der Tabelle '${activeBrowserTable}' und ihrer Spalten`}>
+                              👤 Table Owner: <strong>{activeTableOwner}</strong>
+                            </span>
+                          )}
+                        </div>
                         <button
                           type="button"
                           onClick={() => setBrowserFilters([...browserFilters, { column: browserColumns[0]?.name || "", operator: "=", value: "" }])}
@@ -4011,7 +4038,7 @@ export default function DashboardPage() {
                                       whiteSpace: "nowrap",
                                       borderBottom: "1px solid var(--border-glass)"
                                     }}
-                                    title={`${col.name} (${col.dataType}) ${col.isPrimaryKey ? '[PK]' : ''}`}
+                                    title={`${col.name} (${col.dataType}) ${col.isPrimaryKey ? '[PK]' : ''} • Besitzer: ${activeTableOwner || 'unbekannt'}`}
                                   >
                                     <div style={{ display: "flex", alignItems: "center", gap: "0.25rem" }}>
                                       {col.isPrimaryKey && <span style={{ color: "var(--warning)" }} title="Primary Key">🔑 </span>}
