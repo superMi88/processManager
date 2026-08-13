@@ -193,6 +193,10 @@ export default function DashboardPage() {
   const [browserTables, setBrowserTables] = useState<{ name: string; columnCount: number; owner: string }[]>([]);
   const [activeBrowserTable, setActiveBrowserTable] = useState<string | null>(null);
   const [activeTableOwner, setActiveTableOwner] = useState<string | null>(null);
+  const [availableRoles, setAvailableRoles] = useState<string[]>([]);
+  const [isEditingOwner, setIsEditingOwner] = useState(false);
+  const [selectedNewOwner, setSelectedNewOwner] = useState("");
+  const [isChangingOwnerLoading, setIsChangingOwnerLoading] = useState(false);
   const [browserColumns, setBrowserColumns] = useState<{ name: string; dataType: string; isNullable: boolean; columnDefault: string | null; isPrimaryKey: boolean }[]>([]);
   const [browserRows, setBrowserRows] = useState<Record<string, unknown>[]>([]);
   const [browserTotalCount, setBrowserTotalCount] = useState(0);
@@ -252,6 +256,7 @@ export default function DashboardPage() {
     setBrowserTables([]);
     setActiveBrowserTable(null);
     setActiveTableOwner(null);
+    setIsEditingOwner(false);
     setBrowserColumns([]);
     setBrowserRows([]);
     setBrowserTotalCount(0);
@@ -280,6 +285,7 @@ export default function DashboardPage() {
   const selectBrowserTable = async (dbId: string, tableName: string) => {
     setActiveBrowserTable(tableName);
     setActiveTableOwner(null);
+    setIsEditingOwner(false);
     setBrowserColumns([]);
     setBrowserRows([]);
     setBrowserTotalCount(0);
@@ -295,6 +301,8 @@ export default function DashboardPage() {
       if (colRes.ok && colData.success) {
         setBrowserColumns(colData.columns || []);
         setActiveTableOwner(colData.tableOwner || null);
+        setAvailableRoles(colData.availableRoles || []);
+        setSelectedNewOwner(colData.tableOwner || "");
         
         await fetchBrowserRows(dbId, tableName, {
           filters: [],
@@ -312,6 +320,37 @@ export default function DashboardPage() {
       alert(`Fehler beim Laden der Tabellenstruktur: ${errMsg}`);
     } finally {
       setIsBrowserDataLoading(false);
+    }
+  };
+
+  const handleChangeTableOwner = async (newOwner: string) => {
+    if (!selectedDbForBrowser || !activeBrowserTable || !newOwner) return;
+    setIsChangingOwnerLoading(true);
+    try {
+      const res = await fetch(`/api/databases/${selectedDbForBrowser.id}/tables/${activeBrowserTable}/owner`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ newOwner })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setActiveTableOwner(newOwner);
+        setIsEditingOwner(false);
+        // Refresh browser tables list to update sidebar owner badges
+        const tablesRes = await fetch(`/api/databases/${selectedDbForBrowser.id}/tables`);
+        const tablesData = await tablesRes.json();
+        if (tablesRes.ok && tablesData.success) {
+          setBrowserTables(tablesData.tables || []);
+        }
+      } else {
+        alert(`Fehler beim Ändern des Besitzers: ${data.error || "Unbekannter Fehler"}`);
+      }
+    } catch (err) {
+      console.error("Failed to change table owner:", err);
+      const errMsg = err instanceof Error ? err.message : String(err);
+      alert(`Fehler beim Ändern des Besitzers: ${errMsg}`);
+    } finally {
+      setIsChangingOwnerLoading(false);
     }
   };
 
@@ -3838,7 +3877,7 @@ export default function DashboardPage() {
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                         <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
                           <span style={{ fontSize: "0.85rem", fontWeight: 600, color: "var(--text-primary)" }}>Filter & Abfrage-Kriterien</span>
-                          {activeTableOwner && (
+                          {activeTableOwner && !isEditingOwner && (
                             <span style={{
                               fontSize: "0.75rem",
                               backgroundColor: "rgba(59, 130, 246, 0.12)",
@@ -3848,11 +3887,72 @@ export default function DashboardPage() {
                               borderRadius: "12px",
                               display: "inline-flex",
                               alignItems: "center",
-                              gap: "0.3rem",
+                              gap: "0.35rem",
                               fontWeight: 500
                             }} title={`Besitzer der Tabelle '${activeBrowserTable}' und ihrer Spalten`}>
                               👤 Table Owner: <strong>{activeTableOwner}</strong>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSelectedNewOwner(activeTableOwner || availableRoles[0] || "");
+                                  setIsEditingOwner(true);
+                                }}
+                                style={{
+                                  background: "none",
+                                  border: "none",
+                                  color: "var(--primary)",
+                                  cursor: "pointer",
+                                  padding: "0 0.2rem",
+                                  fontSize: "0.7rem",
+                                  textDecoration: "underline",
+                                  marginLeft: "0.2rem"
+                                }}
+                              >
+                                Ändern
+                              </button>
                             </span>
+                          )}
+
+                          {isEditingOwner && (
+                            <div style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: "0.35rem",
+                              backgroundColor: "rgba(59, 130, 246, 0.12)",
+                              border: "1px solid rgba(59, 130, 246, 0.3)",
+                              padding: "0.2rem 0.55rem",
+                              borderRadius: "12px"
+                            }}>
+                              <span style={{ fontSize: "0.75rem", color: "var(--primary)", fontWeight: 500 }}>👤 Neuer Besitzer:</span>
+                              <select
+                                value={selectedNewOwner}
+                                onChange={e => setSelectedNewOwner(e.target.value)}
+                                className="input-field"
+                                style={{ padding: "0.15rem 0.4rem", fontSize: "0.75rem", background: "#090b0f", height: "auto" }}
+                              >
+                                {availableRoles.map(role => (
+                                  <option key={role} value={role}>{role}</option>
+                                ))}
+                              </select>
+                              <button
+                                type="button"
+                                onClick={() => handleChangeTableOwner(selectedNewOwner)}
+                                disabled={isChangingOwnerLoading}
+                                className="btn btn-primary"
+                                style={{ padding: "0.15rem 0.5rem", fontSize: "0.7rem", height: "auto" }}
+                              >
+                                {isChangingOwnerLoading ? "..." : "Speichern"}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setIsEditingOwner(false)}
+                                disabled={isChangingOwnerLoading}
+                                className="btn btn-secondary"
+                                style={{ padding: "0.15rem 0.4rem", fontSize: "0.7rem", height: "auto" }}
+                              >
+                                ✕
+                              </button>
+                            </div>
                           )}
                         </div>
                         <button

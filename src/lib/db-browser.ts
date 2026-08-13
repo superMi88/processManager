@@ -18,6 +18,7 @@ export interface ColumnMeta {
 export interface GetColumnsResult {
   columns: ColumnMeta[];
   tableOwner: string;
+  availableRoles: string[];
 }
 
 export interface QueryRowsOptions {
@@ -102,7 +103,28 @@ export async function getTables(dbId: string): Promise<TableInfo[]> {
 }
 
 /**
- * Retrieve column metadata and table owner for a specific table
+ * Retrieve list of non-system database roles
+ */
+export async function getDatabaseRoles(dbId: string): Promise<string[]> {
+  const { client } = await getDbClient(dbId);
+  try {
+    const query = `
+      SELECT rolname 
+      FROM pg_roles 
+      WHERE rolname NOT LIKE 'pg_%' 
+      ORDER BY rolname;
+    `;
+    const result = await client.query(query);
+    return result.rows.map((row) => row.rolname);
+  } finally {
+    try {
+      await client.end();
+    } catch {}
+  }
+}
+
+/**
+ * Retrieve column metadata, table owner, and available roles for a specific table
  */
 export async function getColumns(dbId: string, tableName: string): Promise<GetColumnsResult> {
   const { client, schema } = await getDbClient(dbId);
@@ -148,7 +170,54 @@ export async function getColumns(dbId: string, tableName: string): Promise<GetCo
       isPrimaryKey: row.is_primary_key,
     }));
 
-    return { columns, tableOwner };
+    // 3. Query available database roles
+    const rolesQuery = `SELECT rolname FROM pg_roles WHERE rolname NOT LIKE 'pg_%' ORDER BY rolname;`;
+    const rolesResult = await client.query(rolesQuery);
+    const availableRoles = rolesResult.rows.map((r) => r.rolname);
+
+    return { columns, tableOwner, availableRoles };
+  } finally {
+    try {
+      await client.end();
+    } catch {}
+  }
+}
+
+/**
+ * Change the owner of a PostgreSQL table
+ */
+export async function changeTableOwner(
+  dbId: string,
+  tableName: string,
+  newOwner: string
+): Promise<void> {
+  const { client, schema } = await getDbClient(dbId);
+  try {
+    // 1. Verify table exists in schema
+    const tableCheck = await client.query(
+      "SELECT 1 FROM pg_tables WHERE schemaname = $1 AND tablename = $2",
+      [schema, tableName]
+    );
+    if (tableCheck.rowCount === 0) {
+      throw new Error(`Tabelle '${tableName}' existiert nicht im Schema '${schema}'.`);
+    }
+
+    // 2. Verify newOwner exists in pg_roles
+    const roleCheck = await client.query(
+      "SELECT 1 FROM pg_roles WHERE rolname = $1",
+      [newOwner]
+    );
+    if (roleCheck.rowCount === 0) {
+      throw new Error(`Rolle/Benutzer '${newOwner}' existiert nicht in PostgreSQL.`);
+    }
+
+    // 3. Safely execute ALTER TABLE with double quoted identifiers
+    const safeSchema = schema.replace(/"/g, '""');
+    const safeTableName = tableName.replace(/"/g, '""');
+    const safeNewOwner = newOwner.replace(/"/g, '""');
+    
+    const query = `ALTER TABLE "${safeSchema}"."${safeTableName}" OWNER TO "${safeNewOwner}";`;
+    await client.query(query);
   } finally {
     try {
       await client.end();
