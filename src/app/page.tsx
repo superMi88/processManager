@@ -378,6 +378,113 @@ export default function DashboardPage() {
     }
   };
 
+  // Row Edit & Delete states
+  const [editingRow, setEditingRow] = useState<Record<string, unknown> | null>(null);
+  const [editingRowPk, setEditingRowPk] = useState<Record<string, unknown> | null>(null);
+  const [isSavingRow, setIsSavingRow] = useState(false);
+  const [isDeletingRowIndex, setIsDeletingRowIndex] = useState<number | null>(null);
+
+  const handleStartEditRow = (row: Record<string, unknown>) => {
+    const pkObj: Record<string, unknown> = {};
+    if (row.__ctid) {
+      pkObj.__ctid = row.__ctid;
+    } else {
+      const pkCols = browserColumns.filter(c => c.isPrimaryKey);
+      if (pkCols.length > 0) {
+        pkCols.forEach(c => { pkObj[c.name] = row[c.name]; });
+      } else {
+        Object.entries(row).forEach(([k, v]) => { if (k !== "__ctid") pkObj[k] = v; });
+      }
+    }
+    
+    const draftData: Record<string, unknown> = {};
+    browserColumns.forEach(col => {
+      draftData[col.name] = row[col.name] !== undefined ? row[col.name] : null;
+    });
+
+    setEditingRowPk(pkObj);
+    setEditingRow(draftData);
+  };
+
+  const handleSaveEditedRow = async () => {
+    if (!selectedDbForBrowser || !activeBrowserTable || !editingRowPk || !editingRow) return;
+    setIsSavingRow(true);
+    try {
+      const res = await fetch(`/api/databases/${selectedDbForBrowser.id}/tables/${activeBrowserTable}/rows`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          primaryKey: editingRowPk,
+          updatedData: editingRow
+        })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setEditingRow(null);
+        setEditingRowPk(null);
+        await fetchBrowserRows(selectedDbForBrowser.id, activeBrowserTable, {
+          filters: browserFilters,
+          sortColumn: browserSortColumn,
+          sortDirection: browserSortDirection,
+          limit: browserLimit,
+          offset: browserOffset
+        });
+      } else {
+        alert(`Fehler beim Speichern der Zeile: ${data.error || "Unbekannter Fehler"}`);
+      }
+    } catch (err) {
+      console.error("Failed to update row:", err);
+      const errMsg = err instanceof Error ? err.message : String(err);
+      alert(`Fehler beim Speichern der Zeile: ${errMsg}`);
+    } finally {
+      setIsSavingRow(false);
+    }
+  };
+
+  const handleDeleteRow = async (row: Record<string, unknown>, rIdx: number) => {
+    if (!selectedDbForBrowser || !activeBrowserTable) return;
+    if (!confirm("Möchtest du diese Zeile wirklich unwiderruflich löschen?")) return;
+
+    const pkObj: Record<string, unknown> = {};
+    if (row.__ctid) {
+      pkObj.__ctid = row.__ctid;
+    } else {
+      const pkCols = browserColumns.filter(c => c.isPrimaryKey);
+      if (pkCols.length > 0) {
+        pkCols.forEach(c => { pkObj[c.name] = row[c.name]; });
+      } else {
+        Object.entries(row).forEach(([k, v]) => { if (k !== "__ctid") pkObj[k] = v; });
+      }
+    }
+
+    setIsDeletingRowIndex(rIdx);
+    try {
+      const res = await fetch(`/api/databases/${selectedDbForBrowser.id}/tables/${activeBrowserTable}/rows`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ primaryKey: pkObj })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        await fetchBrowserRows(selectedDbForBrowser.id, activeBrowserTable, {
+          filters: browserFilters,
+          sortColumn: browserSortColumn,
+          sortDirection: browserSortDirection,
+          limit: browserLimit,
+          offset: browserOffset
+        });
+      } else {
+        alert(`Fehler beim Löschen der Zeile: ${data.error || "Unbekannter Fehler"}`);
+      }
+    } catch (err) {
+      console.error("Failed to delete row:", err);
+      const errMsg = err instanceof Error ? err.message : String(err);
+      alert(`Fehler beim Löschen der Zeile: ${errMsg}`);
+    } finally {
+      setIsDeletingRowIndex(null);
+    }
+  };
+
   const fetchBrowserRows = async (
     dbId: string,
     tableName: string,
@@ -4193,6 +4300,9 @@ export default function DashboardPage() {
                             zIndex: 2
                           }}>
                             <tr>
+                              <th style={{ padding: "0.75rem 0.75rem", width: "70px", whiteSpace: "nowrap", borderBottom: "1px solid var(--border-glass)", textAlign: "center" }}>
+                                Aktionen
+                              </th>
                               {browserColumns.map(col => {
                                 const isSorted = browserSortColumn === col.name;
                                 return (
@@ -4228,7 +4338,7 @@ export default function DashboardPage() {
                           <tbody>
                             {browserRows.length === 0 ? (
                               <tr>
-                                <td colSpan={browserColumns.length} style={{ padding: "2rem", color: "var(--text-muted)", textAlign: "center" }}>
+                                <td colSpan={browserColumns.length + 1} style={{ padding: "2rem", color: "var(--text-muted)", textAlign: "center" }}>
                                   Keine Zeilen in dieser Tabelle gefunden
                                 </td>
                               </tr>
@@ -4241,6 +4351,29 @@ export default function DashboardPage() {
                                     borderBottom: "1px solid var(--border-glass)",
                                   }}
                                 >
+                                  <td style={{ padding: "0.5rem 0.5rem", whiteSpace: "nowrap", verticalAlign: "top", textAlign: "center" }}>
+                                    <div style={{ display: "flex", justifyContent: "center", gap: "0.3rem" }}>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleStartEditRow(row)}
+                                        className="btn btn-secondary"
+                                        style={{ padding: "0.2rem 0.45rem", fontSize: "0.75rem" }}
+                                        title="Zeile bearbeiten"
+                                      >
+                                        ✏️
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleDeleteRow(row, rIdx)}
+                                        disabled={isDeletingRowIndex === rIdx}
+                                        className="btn btn-secondary"
+                                        style={{ padding: "0.2rem 0.45rem", fontSize: "0.75rem", color: "var(--danger)", borderColor: "rgba(239, 68, 68, 0.3)" }}
+                                        title="Zeile löschen"
+                                      >
+                                        {isDeletingRowIndex === rIdx ? "..." : "🗑️"}
+                                      </button>
+                                    </div>
+                                  </td>
                                   {browserColumns.map(col => {
                                     const val = row[col.name];
                                     let formattedVal = "";
@@ -4342,6 +4475,224 @@ export default function DashboardPage() {
                   </>
                 )}
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Edit Row Modal */}
+      {editingRow && (
+        <div style={{
+          position: "fixed",
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: "rgba(0, 0, 0, 0.8)",
+          backdropFilter: "blur(6px)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          zIndex: 10000,
+          animation: "fadeIn 0.2s ease-out"
+        }}>
+          <div className="glass-panel" style={{
+            width: "90%",
+            maxWidth: "650px",
+            maxHeight: "85vh",
+            padding: "1.5rem",
+            display: "flex",
+            flexDirection: "column",
+            gap: "1.25rem",
+            overflow: "hidden"
+          }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid var(--border-glass)", paddingBottom: "0.75rem" }}>
+              <h3 style={{ fontSize: "1.15rem", fontWeight: 700, color: "#fff", display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                ✏️ Zeile bearbeiten ({activeBrowserTable})
+              </h3>
+              <button 
+                onClick={() => { setEditingRow(null); setEditingRowPk(null); }} 
+                className="btn btn-secondary btn-icon" 
+                style={{ width: "28px", height: "28px", borderRadius: "50%" }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: "1rem", paddingRight: "0.5rem" }}>
+              {browserColumns.map(col => {
+                const rawVal = editingRow[col.name];
+                const isNull = rawVal === null;
+                const dtLower = col.dataType.toLowerCase();
+
+                const isBool = dtLower.includes("bool");
+                const isNum = dtLower.includes("int") || dtLower.includes("float") || dtLower.includes("decimal") || dtLower.includes("numeric") || dtLower.includes("double") || dtLower.includes("real");
+                const isDate = dtLower.includes("timestamp") || dtLower.includes("date");
+                const isTime = dtLower.includes("time") && !dtLower.includes("stamp");
+                const isJson = dtLower.includes("json");
+
+                let inputFormattedVal = "";
+                if (!isNull && rawVal !== undefined) {
+                  if (isDate) {
+                    try {
+                      const d = new Date(String(rawVal));
+                      if (!isNaN(d.getTime())) {
+                        inputFormattedVal = d.toISOString().slice(0, 16);
+                      } else {
+                        inputFormattedVal = String(rawVal);
+                      }
+                    } catch {
+                      inputFormattedVal = String(rawVal);
+                    }
+                  } else if (isJson) {
+                    try {
+                      inputFormattedVal = typeof rawVal === "object" ? JSON.stringify(rawVal, null, 2) : String(rawVal);
+                    } catch {
+                      inputFormattedVal = String(rawVal);
+                    }
+                  } else {
+                    inputFormattedVal = String(rawVal);
+                  }
+                }
+
+                return (
+                  <div key={col.name} style={{ display: "flex", flexDirection: "column", gap: "0.35rem", backgroundColor: "rgba(255,255,255,0.02)", border: "1px solid var(--border-glass)", borderRadius: "6px", padding: "0.75rem" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <label className="input-label" style={{ fontSize: "0.85rem", fontWeight: 600, display: "flex", alignItems: "center", gap: "0.35rem" }}>
+                        {col.isPrimaryKey && <span style={{ color: "var(--warning)" }} title="Primary Key">🔑</span>}
+                        <span>{col.name}</span>
+                        <span style={{ fontSize: "0.7rem", color: "var(--text-muted)", fontWeight: 400 }}>({col.dataType})</span>
+                      </label>
+
+                      {col.isNullable && (
+                        <label style={{ fontSize: "0.75rem", color: "var(--text-muted)", display: "flex", alignItems: "center", gap: "0.3rem", cursor: "pointer" }}>
+                          <input
+                            type="checkbox"
+                            checked={isNull}
+                            onChange={e => {
+                              setEditingRow({
+                                ...editingRow,
+                                [col.name]: e.target.checked ? null : (isBool ? false : isNum ? 0 : "")
+                              });
+                            }}
+                          />
+                          <span>NULL (kein Wert)</span>
+                        </label>
+                      )}
+                    </div>
+
+                    {!isNull && (
+                      <div>
+                        {isBool ? (
+                          <select
+                            value={String(rawVal)}
+                            onChange={e => {
+                              setEditingRow({
+                                ...editingRow,
+                                [col.name]: e.target.value === "true"
+                              });
+                            }}
+                            className="input-field"
+                            style={{ padding: "0.4rem 0.6rem", fontSize: "0.85rem", background: "#090b0f" }}
+                          >
+                            <option value="true">true</option>
+                            <option value="false">false</option>
+                          </select>
+                        ) : isDate ? (
+                          <input
+                            type="datetime-local"
+                            value={inputFormattedVal}
+                            onChange={e => {
+                              setEditingRow({
+                                ...editingRow,
+                                [col.name]: e.target.value ? new Date(e.target.value).toISOString() : null
+                              });
+                            }}
+                            className="input-field"
+                            style={{ padding: "0.4rem 0.6rem", fontSize: "0.85rem" }}
+                          />
+                        ) : isTime ? (
+                          <input
+                            type="time"
+                            value={inputFormattedVal}
+                            onChange={e => {
+                              setEditingRow({
+                                ...editingRow,
+                                [col.name]: e.target.value
+                              });
+                            }}
+                            className="input-field"
+                            style={{ padding: "0.4rem 0.6rem", fontSize: "0.85rem" }}
+                          />
+                        ) : isNum ? (
+                          <input
+                            type="number"
+                            step="any"
+                            value={inputFormattedVal}
+                            onChange={e => {
+                              const valNum = e.target.value === "" ? null : Number(e.target.value);
+                              setEditingRow({
+                                ...editingRow,
+                                [col.name]: valNum
+                              });
+                            }}
+                            className="input-field"
+                            style={{ padding: "0.4rem 0.6rem", fontSize: "0.85rem" }}
+                          />
+                        ) : isJson ? (
+                          <textarea
+                            rows={4}
+                            value={inputFormattedVal}
+                            onChange={e => {
+                              try {
+                                const parsed = JSON.parse(e.target.value);
+                                setEditingRow({ ...editingRow, [col.name]: parsed });
+                              } catch {
+                                setEditingRow({ ...editingRow, [col.name]: e.target.value });
+                              }
+                            }}
+                            className="input-field"
+                            style={{ padding: "0.4rem 0.6rem", fontSize: "0.85rem", fontFamily: "var(--font-mono)" }}
+                          />
+                        ) : (
+                          <input
+                            type="text"
+                            value={inputFormattedVal}
+                            onChange={e => {
+                              setEditingRow({
+                                ...editingRow,
+                                [col.name]: e.target.value
+                              });
+                            }}
+                            className="input-field"
+                            style={{ padding: "0.4rem 0.6rem", fontSize: "0.85rem" }}
+                          />
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            <div style={{ borderTop: "1px solid var(--border-glass)", paddingTop: "0.75rem", display: "flex", justifyContent: "flex-end", gap: "0.75rem" }}>
+              <button
+                type="button"
+                onClick={() => { setEditingRow(null); setEditingRowPk(null); }}
+                disabled={isSavingRow}
+                className="btn btn-secondary"
+                style={{ padding: "0.4rem 1rem", fontSize: "0.85rem" }}
+              >
+                Abbrechen
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveEditedRow}
+                disabled={isSavingRow}
+                className="btn btn-primary"
+                style={{ padding: "0.4rem 1.2rem", fontSize: "0.85rem" }}
+              >
+                {isSavingRow ? "Speichern..." : "Änderungen speichern"}
+              </button>
             </div>
           </div>
         </div>

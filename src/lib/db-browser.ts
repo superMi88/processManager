@@ -312,9 +312,9 @@ export async function queryRows(
       }
     }
 
-    // 5. Query final page of records (using safe integers for LIMIT/OFFSET)
+    // 5. Query final page of records (using safe integers for LIMIT/OFFSET and ctid for row identification)
     const selectQuery = `
-      SELECT * 
+      SELECT ctid::text as __ctid, * 
       FROM "${schema}"."${tableName}" 
       ${whereSql} 
       ${orderSql} 
@@ -329,6 +329,128 @@ export async function queryRows(
       limit,
       offset,
     };
+  } finally {
+    try {
+      await client.end();
+    } catch {}
+  }
+}
+
+/**
+ * Update a specific row in a PostgreSQL table
+ */
+export async function updateRow(
+  dbId: string,
+  tableName: string,
+  primaryKey: Record<string, unknown>,
+  updatedData: Record<string, unknown>
+): Promise<void> {
+  const { client, schema } = await getDbClient(dbId);
+  try {
+    const { columns } = await getColumns(dbId, tableName);
+    const validColumnNames = columns.map((c) => c.name);
+
+    const setClauses: string[] = [];
+    const queryParams: unknown[] = [];
+    let paramIdx = 1;
+
+    for (const [col, val] of Object.entries(updatedData)) {
+      if (!validColumnNames.includes(col)) continue;
+      setClauses.push(`"${col}" = $${paramIdx}`);
+      queryParams.push(val);
+      paramIdx++;
+    }
+
+    if (setClauses.length === 0) {
+      return;
+    }
+
+    const whereClauses: string[] = [];
+    if (primaryKey.__ctid && typeof primaryKey.__ctid === "string") {
+      whereClauses.push(`ctid = $${paramIdx}::tid`);
+      queryParams.push(primaryKey.__ctid);
+      paramIdx++;
+    } else {
+      for (const [col, val] of Object.entries(primaryKey)) {
+        if (!validColumnNames.includes(col) || col === "__ctid") continue;
+        if (val === null) {
+          whereClauses.push(`"${col}" IS NULL`);
+        } else {
+          whereClauses.push(`"${col}" = $${paramIdx}`);
+          queryParams.push(val);
+          paramIdx++;
+        }
+      }
+    }
+
+    if (whereClauses.length === 0) {
+      throw new Error("Keine verlässliche Zeilenidentifikation für die Aktualisierung gefunden.");
+    }
+
+    const safeSchema = schema.replace(/"/g, '""');
+    const safeTableName = tableName.replace(/"/g, '""');
+
+    const query = `
+      UPDATE "${safeSchema}"."${safeTableName}"
+      SET ${setClauses.join(", ")}
+      WHERE ${whereClauses.join(" AND ")};
+    `;
+
+    await client.query(query, queryParams);
+  } finally {
+    try {
+      await client.end();
+    } catch {}
+  }
+}
+
+/**
+ * Delete a specific row from a PostgreSQL table
+ */
+export async function deleteRow(
+  dbId: string,
+  tableName: string,
+  primaryKey: Record<string, unknown>
+): Promise<void> {
+  const { client, schema } = await getDbClient(dbId);
+  try {
+    const { columns } = await getColumns(dbId, tableName);
+    const validColumnNames = columns.map((c) => c.name);
+
+    const whereClauses: string[] = [];
+    const queryParams: unknown[] = [];
+    let paramIdx = 1;
+
+    if (primaryKey.__ctid && typeof primaryKey.__ctid === "string") {
+      whereClauses.push(`ctid = $${paramIdx}::tid`);
+      queryParams.push(primaryKey.__ctid);
+      paramIdx++;
+    } else {
+      for (const [col, val] of Object.entries(primaryKey)) {
+        if (!validColumnNames.includes(col) || col === "__ctid") continue;
+        if (val === null) {
+          whereClauses.push(`"${col}" IS NULL`);
+        } else {
+          whereClauses.push(`"${col}" = $${paramIdx}`);
+          queryParams.push(val);
+          paramIdx++;
+        }
+      }
+    }
+
+    if (whereClauses.length === 0) {
+      throw new Error("Keine verlässliche Zeilenidentifikation für das Löschen gefunden.");
+    }
+
+    const safeSchema = schema.replace(/"/g, '""');
+    const safeTableName = tableName.replace(/"/g, '""');
+
+    const query = `
+      DELETE FROM "${safeSchema}"."${safeTableName}"
+      WHERE ${whereClauses.join(" AND ")};
+    `;
+
+    await client.query(query, queryParams);
   } finally {
     try {
       await client.end();
