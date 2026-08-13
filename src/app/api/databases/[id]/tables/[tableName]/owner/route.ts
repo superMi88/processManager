@@ -10,7 +10,7 @@ export async function POST(
   const { id, tableName } = await context.params;
   try {
     const body = await request.json();
-    const { newOwner } = body || {};
+    const { newOwner, adminUsername, adminPassword } = body || {};
 
     if (!newOwner || typeof newOwner !== "string") {
       return NextResponse.json(
@@ -19,7 +19,9 @@ export async function POST(
       );
     }
 
-    await changeTableOwner(id, tableName, newOwner.trim());
+    const adminCreds = adminUsername ? { username: String(adminUsername), password: String(adminPassword || "") } : undefined;
+
+    await changeTableOwner(id, tableName, newOwner.trim(), adminCreds);
     return NextResponse.json({
       success: true,
       message: `Besitzer von Tabelle '${tableName}' erfolgreich auf '${newOwner}' geändert.`,

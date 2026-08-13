@@ -197,6 +197,9 @@ export default function DashboardPage() {
   const [isEditingOwner, setIsEditingOwner] = useState(false);
   const [selectedNewOwner, setSelectedNewOwner] = useState("");
   const [isChangingOwnerLoading, setIsChangingOwnerLoading] = useState(false);
+  const [showOwnerAdminAuthForm, setShowOwnerAdminAuthForm] = useState(false);
+  const [ownerAdminUsername, setOwnerAdminUsername] = useState("postgres");
+  const [ownerAdminPasswordInput, setOwnerAdminPasswordInput] = useState("");
   const [browserColumns, setBrowserColumns] = useState<{ name: string; dataType: string; isNullable: boolean; columnDefault: string | null; isPrimaryKey: boolean }[]>([]);
   const [browserRows, setBrowserRows] = useState<Record<string, unknown>[]>([]);
   const [browserTotalCount, setBrowserTotalCount] = useState(0);
@@ -257,6 +260,8 @@ export default function DashboardPage() {
     setActiveBrowserTable(null);
     setActiveTableOwner(null);
     setIsEditingOwner(false);
+    setShowOwnerAdminAuthForm(false);
+    setOwnerAdminPasswordInput("");
     setBrowserColumns([]);
     setBrowserRows([]);
     setBrowserTotalCount(0);
@@ -286,6 +291,8 @@ export default function DashboardPage() {
     setActiveBrowserTable(tableName);
     setActiveTableOwner(null);
     setIsEditingOwner(false);
+    setShowOwnerAdminAuthForm(false);
+    setOwnerAdminPasswordInput("");
     setBrowserColumns([]);
     setBrowserRows([]);
     setBrowserTotalCount(0);
@@ -323,19 +330,30 @@ export default function DashboardPage() {
     }
   };
 
-  const handleChangeTableOwner = async (newOwner: string) => {
+  const handleChangeTableOwner = async (newOwner: string, overrideAdminUser?: string, overrideAdminPass?: string) => {
     if (!selectedDbForBrowser || !activeBrowserTable || !newOwner) return;
     setIsChangingOwnerLoading(true);
     try {
+      const payload: Record<string, string> = { newOwner };
+      const userToUse = overrideAdminUser || (showOwnerAdminAuthForm ? ownerAdminUsername : undefined);
+      const passToUse = overrideAdminPass !== undefined ? overrideAdminPass : (showOwnerAdminAuthForm ? ownerAdminPasswordInput : undefined);
+
+      if (userToUse) {
+        payload.adminUsername = userToUse;
+        payload.adminPassword = passToUse || "";
+      }
+
       const res = await fetch(`/api/databases/${selectedDbForBrowser.id}/tables/${activeBrowserTable}/owner`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ newOwner })
+        body: JSON.stringify(payload)
       });
       const data = await res.json();
       if (res.ok && data.success) {
         setActiveTableOwner(newOwner);
         setIsEditingOwner(false);
+        setShowOwnerAdminAuthForm(false);
+        setOwnerAdminPasswordInput("");
         // Refresh browser tables list to update sidebar owner badges
         const tablesRes = await fetch(`/api/databases/${selectedDbForBrowser.id}/tables`);
         const tablesData = await tablesRes.json();
@@ -343,7 +361,13 @@ export default function DashboardPage() {
           setBrowserTables(tablesData.tables || []);
         }
       } else {
-        alert(`Fehler beim Ändern des Besitzers: ${data.error || "Unbekannter Fehler"}`);
+        const errMsg = data.error || "Unbekannter Fehler";
+        const isPermErr = errMsg.toLowerCase().includes("owner") || errMsg.toLowerCase().includes("permission") || errMsg.toLowerCase().includes("superuser") || errMsg.toLowerCase().includes("privilege");
+        if (isPermErr && !showOwnerAdminAuthForm) {
+          setShowOwnerAdminAuthForm(true);
+        } else {
+          alert(`Fehler beim Ändern des Besitzers: ${errMsg}`);
+        }
       }
     } catch (err) {
       console.error("Failed to change table owner:", err);
@@ -3914,44 +3938,90 @@ export default function DashboardPage() {
                           )}
 
                           {isEditingOwner && (
-                            <div style={{
-                              display: "inline-flex",
-                              alignItems: "center",
-                              gap: "0.35rem",
-                              backgroundColor: "rgba(59, 130, 246, 0.12)",
-                              border: "1px solid rgba(59, 130, 246, 0.3)",
-                              padding: "0.2rem 0.55rem",
-                              borderRadius: "12px"
-                            }}>
-                              <span style={{ fontSize: "0.75rem", color: "var(--primary)", fontWeight: 500 }}>👤 Neuer Besitzer:</span>
-                              <select
-                                value={selectedNewOwner}
-                                onChange={e => setSelectedNewOwner(e.target.value)}
-                                className="input-field"
-                                style={{ padding: "0.15rem 0.4rem", fontSize: "0.75rem", background: "#090b0f", height: "auto" }}
-                              >
-                                {availableRoles.map(role => (
-                                  <option key={role} value={role}>{role}</option>
-                                ))}
-                              </select>
-                              <button
-                                type="button"
-                                onClick={() => handleChangeTableOwner(selectedNewOwner)}
-                                disabled={isChangingOwnerLoading}
-                                className="btn btn-primary"
-                                style={{ padding: "0.15rem 0.5rem", fontSize: "0.7rem", height: "auto" }}
-                              >
-                                {isChangingOwnerLoading ? "..." : "Speichern"}
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setIsEditingOwner(false)}
-                                disabled={isChangingOwnerLoading}
-                                className="btn btn-secondary"
-                                style={{ padding: "0.15rem 0.4rem", fontSize: "0.7rem", height: "auto" }}
-                              >
-                                ✕
-                              </button>
+                            <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+                              <div style={{
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: "0.35rem",
+                                backgroundColor: "rgba(59, 130, 246, 0.12)",
+                                border: "1px solid rgba(59, 130, 246, 0.3)",
+                                padding: "0.2rem 0.55rem",
+                                borderRadius: "12px"
+                              }}>
+                                <span style={{ fontSize: "0.75rem", color: "var(--primary)", fontWeight: 500 }}>👤 Neuer Besitzer:</span>
+                                <select
+                                  value={selectedNewOwner}
+                                  onChange={e => setSelectedNewOwner(e.target.value)}
+                                  className="input-field"
+                                  style={{ padding: "0.15rem 0.4rem", fontSize: "0.75rem", background: "#090b0f", height: "auto" }}
+                                >
+                                  {availableRoles.map(role => (
+                                    <option key={role} value={role}>{role}</option>
+                                  ))}
+                                </select>
+                                <button
+                                  type="button"
+                                  onClick={() => handleChangeTableOwner(selectedNewOwner)}
+                                  disabled={isChangingOwnerLoading}
+                                  className="btn btn-primary"
+                                  style={{ padding: "0.15rem 0.5rem", fontSize: "0.7rem", height: "auto" }}
+                                >
+                                  {isChangingOwnerLoading ? "..." : "Speichern"}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setIsEditingOwner(false);
+                                    setShowOwnerAdminAuthForm(false);
+                                  }}
+                                  disabled={isChangingOwnerLoading}
+                                  className="btn btn-secondary"
+                                  style={{ padding: "0.15rem 0.4rem", fontSize: "0.7rem", height: "auto" }}
+                                >
+                                  ✕
+                                </button>
+                              </div>
+
+                              {showOwnerAdminAuthForm && (
+                                <div style={{
+                                  display: "flex",
+                                  alignItems: "center",
+                                  gap: "0.4rem",
+                                  backgroundColor: "rgba(239, 68, 68, 0.08)",
+                                  border: "1px solid rgba(239, 68, 68, 0.3)",
+                                  padding: "0.35rem 0.6rem",
+                                  borderRadius: "8px"
+                                }}>
+                                  <span style={{ fontSize: "0.75rem", color: "var(--danger)", fontWeight: 600, whiteSpace: "nowrap" }}>
+                                    🔒 Superuser-Rechte (postgres):
+                                  </span>
+                                  <input
+                                    type="text"
+                                    placeholder="postgres"
+                                    value={ownerAdminUsername}
+                                    onChange={e => setOwnerAdminUsername(e.target.value)}
+                                    className="input-field"
+                                    style={{ padding: "0.15rem 0.4rem", fontSize: "0.75rem", width: "90px" }}
+                                  />
+                                  <input
+                                    type="password"
+                                    placeholder="Admin Passwort"
+                                    value={ownerAdminPasswordInput}
+                                    onChange={e => setOwnerAdminPasswordInput(e.target.value)}
+                                    className="input-field"
+                                    style={{ padding: "0.15rem 0.4rem", fontSize: "0.75rem", width: "130px" }}
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => handleChangeTableOwner(selectedNewOwner, ownerAdminUsername, ownerAdminPasswordInput)}
+                                    disabled={isChangingOwnerLoading}
+                                    className="btn btn-primary"
+                                    style={{ padding: "0.15rem 0.5rem", fontSize: "0.7rem", height: "auto" }}
+                                  >
+                                    {isChangingOwnerLoading ? "..." : "Mit Admin-Rechten ausführen"}
+                                  </button>
+                                </div>
+                              )}
                             </div>
                           )}
                         </div>

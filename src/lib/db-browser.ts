@@ -1,5 +1,5 @@
 import { Client } from "pg";
-import { readStore, buildDatabaseUrl } from "./resource-store";
+import { readStore, buildDatabaseUrl, DatabaseUser } from "./resource-store";
 
 export interface TableInfo {
   name: string;
@@ -39,7 +39,11 @@ export interface QueryRowsResult {
 /**
  * Connect to a postgres database and return a client and the configured schema
  */
-export async function getDbClient(dbId: string): Promise<{ client: Client; schema: string }> {
+export async function getDbClient(
+  dbId: string,
+  useSuperuser: boolean = false,
+  customAdmin?: { username: string; password?: string }
+): Promise<{ client: Client; schema: string }> {
   const store = readStore();
   const db = store.databases.find((d) => d.id === dbId);
   if (!db) {
@@ -49,7 +53,16 @@ export async function getDbClient(dbId: string): Promise<{ client: Client; schem
     throw new Error(`Datenbank-Browser wird aktuell nur für PostgreSQL unterstützt. '${db.alias}' ist eine ${db.type} Datenbank.`);
   }
 
-  const connectionString = buildDatabaseUrl(db);
+  let userObj: DatabaseUser | undefined;
+  if (customAdmin && customAdmin.username) {
+    userObj = { id: "u-admin-override", username: customAdmin.username, password: customAdmin.password || "" };
+  } else if (useSuperuser) {
+    userObj = db.superuser || db.users?.find((u) => u.username === "postgres" || u.username === "admin") || db.users?.[0];
+  } else {
+    userObj = db.users?.[0];
+  }
+
+  const connectionString = buildDatabaseUrl(db, userObj);
   if (!connectionString) {
     throw new Error(`Verbindungs-URL für Datenbank '${db.alias}' konnte nicht generiert werden.`);
   }
@@ -189,9 +202,11 @@ export async function getColumns(dbId: string, tableName: string): Promise<GetCo
 export async function changeTableOwner(
   dbId: string,
   tableName: string,
-  newOwner: string
+  newOwner: string,
+  adminCreds?: { username?: string; password?: string }
 ): Promise<void> {
-  const { client, schema } = await getDbClient(dbId);
+  const customAdmin = adminCreds?.username ? { username: adminCreds.username, password: adminCreds.password || "" } : undefined;
+  const { client, schema } = await getDbClient(dbId, true, customAdmin);
   try {
     // 1. Verify table exists in schema
     const tableCheck = await client.query(
