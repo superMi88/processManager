@@ -6,7 +6,8 @@ export async function GET() {
     const store = readStore();
     return NextResponse.json({
       databases: store.databases,
-      credentials: store.credentials
+      credentials: store.credentials,
+      processLinks: store.processLinks || {}
     });
   } catch (error) {
     console.error("GET /api/manager/resources failed:", error);

@@ -130,6 +130,15 @@ export default function DashboardPage() {
   const [domainFormSubmitting, setDomainFormSubmitting] = useState(false);
   const [domainWarning, setDomainWarning] = useState<string | null>(null);
   const [domainError, setDomainError] = useState<string | null>(null);
+
+  // Process-to-Resource Links states
+  const [processLinks, setProcessLinks] = useState<Record<string, { dbId?: string; port?: string; domain?: string }>>({});
+  const [editingProcessName, setEditingProcessName] = useState<string | null>(null);
+  const [targetDbId, setTargetDbId] = useState<string>("");
+  const [targetPort, setTargetPort] = useState<string>("");
+  const [targetDomain, setTargetDomain] = useState<string>("");
+  const [isSavingProcessLink, setIsSavingProcessLink] = useState(false);
+  const [processLinkError, setProcessLinkError] = useState<string | null>(null);
   
   // Google Key Form states
   const [googleAlias, setGoogleAlias] = useState("");
@@ -755,6 +764,9 @@ export default function DashboardPage() {
         const data = await response.json();
         setRegisteredDbs(data.databases || []);
         setRegisteredCreds(data.credentials || []);
+        if (data.processLinks) {
+          setProcessLinks(data.processLinks);
+        }
       }
     } catch (error) {
       console.error("Error fetching resources:", error);
@@ -819,6 +831,194 @@ export default function DashboardPage() {
       setIsDomainsLoading(false);
     }
   }, []);
+
+  const getProcessResources = useCallback((procName: string) => {
+    // 1. Direct explicit assignment from processLinks
+    const explicit = processLinks[procName];
+    let dbId = explicit?.dbId;
+    let port = explicit?.port;
+    let domainStr = explicit?.domain;
+
+    // 2. Try to match project from discoveredProjects
+    const normProc = procName.toLowerCase().replace(/[-_]/g, "");
+    const matchedProj = discoveredProjects.find(p => {
+      const pNorm = p.name.toLowerCase().replace(/[-_]/g, "");
+      return pNorm === normProc || p.name.toLowerCase() === procName.toLowerCase();
+    });
+
+    // Resolve DB
+    let resolvedDb: {
+      id?: string;
+      alias: string;
+      type?: "postgres" | "mongodb";
+      host?: string;
+      port?: number;
+      database?: string;
+    } | null = null;
+
+    if (dbId) {
+      const reg = registeredDbs.find(d => d.id === dbId);
+      if (reg) {
+        resolvedDb = { id: reg.id, alias: reg.alias, type: reg.type, host: reg.host, port: reg.port, database: reg.database };
+      }
+    }
+
+    if (!resolvedDb && matchedProj) {
+      for (const req of matchedProj.requirements || []) {
+        if (req.type === "database" || req.key.toLowerCase().includes("database") || req.key.toLowerCase().includes("db")) {
+          const lId = matchedProj.links?.[req.key];
+          if (lId) {
+            const reg = registeredDbs.find(d => d.id === lId);
+            if (reg) {
+              resolvedDb = { id: reg.id, alias: reg.alias, type: reg.type, host: reg.host, port: reg.port, database: reg.database };
+              break;
+            }
+          }
+        }
+      }
+    }
+
+    if (!resolvedDb) {
+      const scanned = databases.find(d => d.sourceProcess?.toLowerCase() === procName.toLowerCase());
+      if (scanned) {
+        resolvedDb = {
+          alias: scanned.name,
+          type: scanned.type !== "unknown" ? scanned.type : undefined,
+          host: scanned.host,
+          database: scanned.name
+        };
+      }
+    }
+
+    // Resolve Port
+    if (!port && matchedProj) {
+      for (const req of matchedProj.requirements || []) {
+        if (req.key === "PORT" || req.key.includes("PORT")) {
+          const mappedVal = matchedProj.links?.[req.key];
+          if (mappedVal) {
+            const cred = registeredCreds.find(c => c.id === mappedVal);
+            if (cred && cred.value) {
+              port = cred.value;
+            } else if (!isNaN(Number(mappedVal))) {
+              port = mappedVal;
+            }
+          }
+        }
+      }
+    }
+
+    if (!port) {
+      const scannedP = scannedPorts.find(p => 
+        (p.projectName && p.projectName.toLowerCase() === procName.toLowerCase()) ||
+        (matchedProj && p.projectName && p.projectName.toLowerCase() === matchedProj.name.toLowerCase())
+      );
+      if (scannedP) {
+        port = String(scannedP.port);
+      }
+    }
+
+    // Resolve Domain
+    let resolvedDomain: { domain: string; sslEnabled: boolean } | null = null;
+    if (domainStr) {
+      const regDom = registeredDomains.find(d => d.domain.toLowerCase() === domainStr!.toLowerCase());
+      resolvedDomain = {
+        domain: domainStr,
+        sslEnabled: regDom?.sslEnabled ?? false
+      };
+    } else {
+      const matchDom = registeredDomains.find(d => {
+        if (d.targetType === "project") {
+          const tNorm = d.targetValue.toLowerCase().replace(/[-_]/g, "");
+          return tNorm === normProc || (matchedProj && tNorm === matchedProj.name.toLowerCase().replace(/[-_]/g, ""));
+        } else if (d.targetType === "port" && port) {
+          return d.targetValue === port;
+        }
+        return false;
+      });
+      if (matchDom) {
+        resolvedDomain = {
+          domain: matchDom.domain,
+          sslEnabled: matchDom.sslEnabled
+        };
+      }
+    }
+
+    return {
+      db: resolvedDb,
+      port: port || null,
+      domain: resolvedDomain,
+      hasCustomLinks: Boolean(explicit && (explicit.dbId || explicit.port || explicit.domain))
+    };
+  }, [processLinks, discoveredProjects, registeredDbs, registeredCreds, scannedPorts, registeredDomains, databases]);
+
+  const openProcessLinkModal = (procName: string) => {
+    const res = getProcessResources(procName);
+    const existing = processLinks[procName];
+    setEditingProcessName(procName);
+    setTargetDbId(existing?.dbId || res.db?.id || "");
+    setTargetPort(existing?.port || res.port || "");
+    setTargetDomain(existing?.domain || res.domain?.domain || "");
+    setProcessLinkError(null);
+  };
+
+  const closeProcessLinkModal = () => {
+    setEditingProcessName(null);
+    setTargetDbId("");
+    setTargetPort("");
+    setTargetDomain("");
+    setProcessLinkError(null);
+  };
+
+  const handleSaveProcessLink = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingProcessName) return;
+
+    setIsSavingProcessLink(true);
+    setProcessLinkError(null);
+
+    try {
+      const response = await fetch("/api/manager/process-links", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          processName: editingProcessName,
+          dbId: targetDbId || undefined,
+          port: targetPort || undefined,
+          domain: targetDomain || undefined,
+        })
+      });
+
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.error || "Fehler beim Speichern der Verknüpfung");
+      }
+
+      const data = await response.json();
+      if (data.processLinks) {
+        setProcessLinks(data.processLinks);
+      } else {
+        setProcessLinks(prev => {
+          const next = { ...prev };
+          if (!targetDbId && !targetPort && !targetDomain) {
+            delete next[editingProcessName];
+          } else {
+            next[editingProcessName] = {
+              dbId: targetDbId || undefined,
+              port: targetPort || undefined,
+              domain: targetDomain || undefined,
+            };
+          }
+          return next;
+        });
+      }
+
+      closeProcessLinkModal();
+    } catch (err) {
+      setProcessLinkError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsSavingProcessLink(false);
+    }
+  };
 
   const handleRegisterDomain = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1890,6 +2090,7 @@ export default function DashboardPage() {
                     <tr>
                       <th>Name</th>
                       <th>Status</th>
+                      <th>Ressourcen &amp; Endpunkte</th>
                       <th>CPU</th>
                       <th>RAM</th>
                       <th>Restarts</th>
@@ -1903,6 +2104,7 @@ export default function DashboardPage() {
                       const isStopping = actionInProgress[`${proc.name}-stop`];
                       const isRestarting = actionInProgress[`${proc.name}-restart`];
                       const isAnyAction = isStarting || isStopping || isRestarting;
+                      const res = getProcessResources(proc.name);
 
                       return (
                         <tr 
@@ -1919,6 +2121,110 @@ export default function DashboardPage() {
                             </div>
                           </td>
                           <td>{getStatusBadge(proc.status)}</td>
+                          <td>
+                            <div className={styles.resourceBoxesWrapper}>
+                              {/* Database Box */}
+                              {res.db ? (
+                                <span
+                                  className={`${styles.resourceBox} ${styles.resourceBoxDb}`}
+                                  onClick={() => setActiveTab("databases")}
+                                  title={`Datenbank: ${res.db.alias} (${res.db.type ? res.db.type.toUpperCase() : 'DB'} auf ${res.db.host || 'localhost'}${res.db.port ? `:${res.db.port}` : ''}) - Klick zum Öffnen`}
+                                >
+                                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                    <ellipse cx="12" cy="5" rx="9" ry="3"></ellipse>
+                                    <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path>
+                                    <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path>
+                                  </svg>
+                                  <span className={styles.resourceBoxValue}>{res.db.alias}</span>
+                                  {res.db.port && <span className={styles.resourceBoxLabel}>:{res.db.port}</span>}
+                                </span>
+                              ) : (
+                                <button
+                                  type="button"
+                                  className={`${styles.resourceBox} ${styles.resourceBoxEmpty}`}
+                                  onClick={() => openProcessLinkModal(proc.name)}
+                                  title="Datenbank zuweisen"
+                                >
+                                  + DB
+                                </button>
+                              )}
+
+                              {/* Port Box */}
+                              {res.port ? (
+                                <a
+                                  href={`http://localhost:${res.port}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className={`${styles.resourceBox} ${styles.resourceBoxPort}`}
+                                  title={`Lokaler Port ${res.port} (im Browser öffnen)`}
+                                >
+                                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                    <circle cx="12" cy="12" r="10"></circle>
+                                    <line x1="12" y1="8" x2="12" y2="12"></line>
+                                    <line x1="12" y1="16" x2="12.01" y2="16"></line>
+                                  </svg>
+                                  <span className={styles.resourceBoxLabel}>Port:</span>
+                                  <span className={styles.resourceBoxValue}>{res.port}</span>
+                                </a>
+                              ) : (
+                                <button
+                                  type="button"
+                                  className={`${styles.resourceBox} ${styles.resourceBoxEmpty}`}
+                                  onClick={() => openProcessLinkModal(proc.name)}
+                                  title="Port zuweisen"
+                                >
+                                  + Port
+                                </button>
+                              )}
+
+                              {/* Domain Box */}
+                              {res.domain ? (
+                                <a
+                                  href={`http${res.domain.sslEnabled ? "s" : ""}://${res.domain.domain}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className={`${styles.resourceBox} ${styles.resourceBoxDomain}`}
+                                  title={`Domain: ${res.domain.domain} (im Browser öffnen)`}
+                                >
+                                  {res.domain.sslEnabled ? (
+                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                      <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                                      <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                                    </svg>
+                                  ) : (
+                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                      <circle cx="12" cy="12" r="10"></circle>
+                                      <line x1="2" y1="12" x2="22" y2="12"></line>
+                                      <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+                                    </svg>
+                                  )}
+                                  <span className={styles.resourceBoxValue}>{res.domain.domain}</span>
+                                </a>
+                              ) : (
+                                <button
+                                  type="button"
+                                  className={`${styles.resourceBox} ${styles.resourceBoxEmpty}`}
+                                  onClick={() => openProcessLinkModal(proc.name)}
+                                  title="Domain zuweisen"
+                                >
+                                  + Domain
+                                </button>
+                              )}
+
+                              {/* Edit Mapping Button */}
+                              <button
+                                type="button"
+                                className={styles.resourceBoxEditBtn}
+                                onClick={() => openProcessLinkModal(proc.name)}
+                                title="Ressourcen für diesen Prozess verknüpfen"
+                              >
+                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                  <path d="M12 20h9"></path>
+                                  <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
+                                </svg>
+                              </button>
+                            </div>
+                          </td>
                           <td className={styles.monoText}>{proc.status === "online" ? `${proc.cpu}%` : "—"}</td>
                           <td className={styles.monoText}>{proc.status === "online" ? formatMemory(proc.memory) : "—"}</td>
                           <td className={styles.monoText}>{proc.restarts}</td>
@@ -4694,6 +5000,125 @@ export default function DashboardPage() {
                 {isSavingRow ? "Speichern..." : "Änderungen speichern"}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal for linking Resources to a PM2 Process */}
+      {editingProcessName && (
+        <div className={styles.modalOverlay} onClick={closeProcessLinkModal}>
+          <div className={styles.modalCard} onClick={(e) => e.stopPropagation()}>
+            <div className={styles.modalHeader}>
+              <div className={styles.modalTitle}>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" strokeWidth="2">
+                  <ellipse cx="12" cy="5" rx="9" ry="3"></ellipse>
+                  <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path>
+                  <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path>
+                </svg>
+                <span>Ressourcen zuweisen: <code style={{ color: "var(--primary)" }}>{editingProcessName}</code></span>
+              </div>
+              <button type="button" className={styles.modalCloseBtn} onClick={closeProcessLinkModal} title="Schließen">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <line x1="18" y1="6" x2="6" y2="18"></line>
+                  <line x1="6" y1="6" x2="18" y2="18"></line>
+                </svg>
+              </button>
+            </div>
+
+            {processLinkError && (
+              <div style={{ padding: "0.75rem", background: "rgba(239, 68, 68, 0.1)", border: "1px solid var(--danger)", borderRadius: "var(--radius-md)", color: "#fca5a5", fontSize: "0.85rem", marginBottom: "1rem" }}>
+                {processLinkError}
+              </div>
+            )}
+
+            <form onSubmit={handleSaveProcessLink}>
+              <div className={styles.modalBody}>
+                {/* Database Selection */}
+                <div className="input-group">
+                  <label className="input-label" style={{ display: "flex", justifyContent: "space-between" }}>
+                    <span>Datenbank</span>
+                    <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>Zentraler DB-Pool</span>
+                  </label>
+                  <select
+                    value={targetDbId}
+                    onChange={(e) => setTargetDbId(e.target.value)}
+                    className={styles.selectField}
+                  >
+                    <option value="">-- Keine Datenbank verknüpfen --</option>
+                    {registeredDbs.map((db) => (
+                      <option key={db.id} value={db.id}>
+                        {db.alias} ({db.type.toUpperCase()}: {db.database} auf Port {db.port})
+                      </option>
+                    ))}
+                  </select>
+                  <p className={styles.helperText}>
+                    💡 Eine Datenbank kann problemlos von mehreren Projekten oder Prozessen gemeinsam genutzt werden.
+                  </p>
+                </div>
+
+                {/* Port input */}
+                <div className="input-group">
+                  <label className="input-label">Port</label>
+                  <input
+                    type="text"
+                    value={targetPort}
+                    onChange={(e) => setTargetPort(e.target.value)}
+                    placeholder="z. B. 3001"
+                    className={styles.inputField}
+                  />
+                  <p className={styles.helperText}>
+                    Der lokale Port, auf dem dieser Node/PM2-Prozess lauscht.
+                  </p>
+                </div>
+
+                {/* Domain input */}
+                <div className="input-group">
+                  <label className="input-label">Domain (Nginx)</label>
+                  <input
+                    type="text"
+                    value={targetDomain}
+                    onChange={(e) => setTargetDomain(e.target.value)}
+                    placeholder="z. B. app.meinedomain.de"
+                    className={styles.inputField}
+                  />
+                  {registeredDomains.length > 0 && (
+                    <div style={{ display: "flex", gap: "0.35rem", flexWrap: "wrap", marginTop: "0.4rem", alignItems: "center" }}>
+                      <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>Bereits registriert:</span>
+                      {registeredDomains.map((d) => (
+                        <button
+                          key={d.id}
+                          type="button"
+                          onClick={() => setTargetDomain(d.domain)}
+                          className="btn btn-secondary"
+                          style={{ padding: "0.15rem 0.45rem", fontSize: "0.72rem" }}
+                        >
+                          {d.domain}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  <p className={styles.helperText}>
+                    Domain-Name, der per Nginx Reverse Proxy auf diesen Prozess weiterleitet.
+                  </p>
+                </div>
+              </div>
+
+              <div className={styles.modalFooter}>
+                <button type="button" onClick={closeProcessLinkModal} className="btn btn-secondary" disabled={isSavingProcessLink}>
+                  Abbrechen
+                </button>
+                <button type="submit" className="btn btn-primary" disabled={isSavingProcessLink}>
+                  {isSavingProcessLink ? (
+                    <>
+                      <svg className="spinner" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10" strokeDasharray="30 15"></circle></svg>
+                      <span>Wird gespeichert...</span>
+                    </>
+                  ) : (
+                    <span>Zuordnung speichern</span>
+                  )}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

@@ -50,11 +50,18 @@ export interface DomainConfig {
   createdAt: string;
 }
 
+export interface ProcessLinkConfig {
+  dbId?: string;
+  port?: string;
+  domain?: string;
+}
+
 export interface ResourceStore {
   databases: DatabaseConfig[];
   credentials: CredentialConfig[];
   links: Record<string, Record<string, string>>; // projectName -> envKey -> resourceId
   domains?: DomainConfig[];
+  processLinks?: Record<string, ProcessLinkConfig>; // processName -> { dbId, port, domain }
 }
 
 const STORE_PATH = path.resolve(process.cwd(), "src/data/resources.json");
@@ -101,12 +108,15 @@ export function readStore(): ResourceStore {
       if (!store.domains) {
         store.domains = [];
       }
+      if (!store.processLinks) {
+        store.processLinks = {};
+      }
       return store;
     }
   } catch (error) {
     console.error("Failed to read resources store:", error);
   }
-  return { databases: [], credentials: [], links: {}, domains: [] };
+  return { databases: [], credentials: [], links: {}, domains: [], processLinks: {} };
 }
 
 // Helper to save store
