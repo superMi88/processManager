@@ -835,9 +835,9 @@ export default function DashboardPage() {
   const getProcessResources = useCallback((procName: string) => {
     // 1. Direct explicit assignment from processLinks
     const explicit = processLinks[procName];
-    let dbId = explicit?.dbId;
+    const dbId = explicit?.dbId;
     let port = explicit?.port;
-    let domainStr = explicit?.domain;
+    const domainStr = explicit?.domain;
 
     // 2. Try to match project from discoveredProjects
     const normProc = procName.toLowerCase().replace(/[-_]/g, "");
