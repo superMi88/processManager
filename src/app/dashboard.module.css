@@ -756,4 +756,238 @@
   border-top: 1px solid var(--border-glass);
 }
 
+/* ==========================================================================
+   Dashboard Cockpit View (Project & Repository Grouping)
+   ========================================================================== */
+
+.cockpitSection {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.cockpitSectionHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-bottom: 0.5rem;
+}
+
+.viewModeToggle {
+  display: inline-flex;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-md);
+  padding: 0.2rem;
+  gap: 0.25rem;
+}
+
+.viewModeBtn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  padding: 0.4rem 0.85rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.82rem;
+  font-weight: 500;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  transition: var(--transition-fast);
+}
+
+.viewModeBtn:hover {
+  color: var(--text-primary);
+}
+
+.viewModeBtnActive {
+  background: rgba(59, 130, 246, 0.18);
+  color: #fff;
+  border: 1px solid rgba(59, 130, 246, 0.35);
+}
+
+.cockpitGrid {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.cockpitCard {
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-glass);
+  background: var(--bg-surface);
+  overflow: hidden;
+  transition: var(--transition-fast);
+}
+
+.cockpitCard:hover {
+  border-color: rgba(59, 130, 246, 0.3);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+}
+
+.cockpitCardHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 1rem;
+  padding: 1.15rem 1.5rem;
+  background: rgba(255, 255, 255, 0.02);
+  border-bottom: 1px solid var(--border-glass);
+}
+
+.cockpitCardTitleGroup {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.cockpitCardTitle {
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: #fff;
+}
+
+.cockpitRepoBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-glass);
+  padding: 0.15rem 0.55rem;
+  border-radius: 20px;
+  text-decoration: none;
+  transition: var(--transition-fast);
+}
+
+.cockpitRepoBadge:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.1);
+  border-color: var(--border-glass-hover);
+}
+
+.cockpitStatusBadge {
+  font-size: 0.78rem;
+  font-family: var(--font-mono);
+  padding: 0.2rem 0.6rem;
+  border-radius: 20px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.cockpitStatusOnline {
+  background: rgba(16, 185, 129, 0.12);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.cockpitStatusOffline {
+  background: rgba(239, 68, 68, 0.12);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+.cockpitStatusPartial {
+  background: rgba(245, 158, 11, 0.12);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+.cockpitServicesList {
+  display: flex;
+  flex-direction: column;
+}
+
+.cockpitServiceItem {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 1rem;
+  padding: 1rem 1.5rem;
+  border-bottom: 1px solid var(--border-glass);
+  transition: var(--transition-fast);
+}
+
+.cockpitServiceItem:last-child {
+  border-bottom: none;
+}
+
+.cockpitServiceItem:hover {
+  background: rgba(255, 255, 255, 0.015);
+}
+
+.cockpitServiceInfo {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  min-width: 200px;
+}
+
+.cockpitServiceName {
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.cockpitServiceMeta {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.cockpitServiceMetrics {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+}
+
+.metricItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.metricLabel {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.standaloneCard {
+  border-radius: var(--radius-lg);
+  border: 1px dashed rgba(255, 255, 255, 0.14);
+  background: rgba(14, 19, 31, 0.4);
+  margin-top: 1rem;
+  overflow: hidden;
+}
+
+.standaloneHeader {
+  padding: 1rem 1.5rem;
+  background: rgba(255, 255, 255, 0.02);
+  border-bottom: 1px solid var(--border-glass);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+
 

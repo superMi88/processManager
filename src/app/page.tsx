@@ -87,6 +87,8 @@ interface DiscoveredProject {
   name: string;
   path: string;
   repository?: string;
+  category?: string;
+  pm2Process?: string;
   services?: ProjectServiceDeclaration[];
   requirements: ProjectRequirement[];
   links: Record<string, string>;
@@ -149,6 +151,7 @@ export default function DashboardPage() {
   const [targetDomain, setTargetDomain] = useState<string>("");
   const [isSavingProcessLink, setIsSavingProcessLink] = useState(false);
   const [processLinkError, setProcessLinkError] = useState<string | null>(null);
+  const [dashboardViewMode, setDashboardViewMode] = useState<"cockpit" | "table">("cockpit");
   
   // Google Key Form states
   const [googleAlias, setGoogleAlias] = useState("");
@@ -2080,10 +2083,52 @@ export default function DashboardPage() {
             </div>
           </section>
 
-          {/* Main Content: Processes Table */}
+          {/* Main Content: Cockpit / Processes Table */}
           <section>
-            <div className={styles.sectionHeader}>
-              <h2 className={styles.sectionTitle}>PM2 Prozesse</h2>
+            <div className={styles.cockpitSectionHeader}>
+              <div>
+                <h2 className={styles.sectionTitle} style={{ margin: 0 }}>
+                  {dashboardViewMode === "cockpit" ? "Projekt- & Server-Cockpit" : "PM2 Prozesse"}
+                </h2>
+                <p style={{ margin: "0.25rem 0 0 0", fontSize: "0.85rem", color: "var(--text-secondary)" }}>
+                  {dashboardViewMode === "cockpit" 
+                    ? "Übersicht gruppiert nach Repositories, Projekten, Services und verknüpften Ressourcen."
+                    : "Flache Ansicht aller auf dem Server registrierten PM2-Dienste."}
+                </p>
+              </div>
+
+              <div className={styles.viewModeToggle}>
+                <button
+                  type="button"
+                  onClick={() => setDashboardViewMode("cockpit")}
+                  className={`${styles.viewModeBtn} ${dashboardViewMode === "cockpit" ? styles.viewModeBtnActive : ""}`}
+                  title="Projekt- & Repository-Cockpit"
+                >
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <rect x="3" y="3" width="7" height="7"></rect>
+                    <rect x="14" y="3" width="7" height="7"></rect>
+                    <rect x="14" y="14" width="7" height="7"></rect>
+                    <rect x="3" y="14" width="7" height="7"></rect>
+                  </svg>
+                  Cockpit
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDashboardViewMode("table")}
+                  className={`${styles.viewModeBtn} ${dashboardViewMode === "table" ? styles.viewModeBtnActive : ""}`}
+                  title="Flache PM2 Prozesstabelle"
+                >
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <line x1="8" y1="6" x2="21" y2="6"></line>
+                    <line x1="8" y1="12" x2="21" y2="12"></line>
+                    <line x1="8" y1="18" x2="21" y2="18"></line>
+                    <line x1="3" y1="6" x2="3.01" y2="6"></line>
+                    <line x1="3" y1="12" x2="3.01" y2="12"></line>
+                    <line x1="3" y1="18" x2="3.01" y2="18"></line>
+                  </svg>
+                  PM2-Tabelle
+                </button>
+              </div>
             </div>
 
             {isLoading ? (
@@ -2101,27 +2146,597 @@ export default function DashboardPage() {
                 </svg>
                 <p style={{ marginTop: "1rem", color: "var(--text-secondary)" }}>Prozessliste wird geladen...</p>
               </div>
-            ) : processes.length === 0 ? (
-              <div className={`${styles.tableWrapper} glass-panel`}>
-                <div className={styles.emptyState}>
-                  <svg
-                    className={styles.emptyStateIcon}
-                    width="48"
-                    height="48"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.5"
-                  >
-                    <circle cx="12" cy="12" r="10"></circle>
-                    <line x1="8" y1="12" x2="16" y2="12"></line>
-                  </svg>
-                  <p>Keine PM2-Prozesse gefunden.</p>
-                  <p style={{ fontSize: "0.85rem", color: "var(--text-muted)" }}>
-                    Stelle sicher, dass PM2 auf dem Server läuft und Prozesse registriert sind.
-                  </p>
-                </div>
-              </div>
+            ) : dashboardViewMode === "cockpit" ? (
+              (() => {
+                // Determine claimed PM2 processes
+                const claimedProcNames = new Set<string>();
+
+                const projectCards = discoveredProjects.map(proj => {
+                  const services = (proj.services && proj.services.length > 0)
+                    ? proj.services
+                    : [{ name: proj.name, pm2Process: proj.pm2Process || proj.name, requirements: proj.requirements }];
+
+                  const serviceRows = services.map(svc => {
+                    const targetProcName = svc.pm2Process || svc.name;
+                    const matchedProc = processes.find(p => 
+                      (svc.pm2Process && p.name.toLowerCase() === svc.pm2Process.toLowerCase()) ||
+                      p.name.toLowerCase() === svc.name.toLowerCase() ||
+                      p.name.toLowerCase() === proj.name.toLowerCase()
+                    );
+
+                    if (matchedProc) {
+                      claimedProcNames.add(matchedProc.name.toLowerCase());
+                    }
+
+                    const res = getProcessResources(matchedProc ? matchedProc.name : targetProcName);
+
+                    return {
+                      service: svc,
+                      proc: matchedProc || null,
+                      res,
+                      procName: matchedProc ? matchedProc.name : targetProcName,
+                    };
+                  });
+
+                  const onlineCount = serviceRows.filter(sr => sr.proc?.status === "online").length;
+                  const totalServices = serviceRows.length;
+
+                  return {
+                    project: proj,
+                    services: serviceRows,
+                    onlineCount,
+                    totalServices,
+                  };
+                });
+
+                const standaloneProcesses = processes.filter(p => !claimedProcNames.has(p.name.toLowerCase()));
+
+                return (
+                  <div className={styles.cockpitGrid}>
+                    {projectCards.length === 0 && standaloneProcesses.length === 0 && (
+                      <div className={`${styles.tableWrapper} glass-panel`}>
+                        <div className={styles.emptyState}>
+                          <p>Keine Projekte oder Prozesse gefunden.</p>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Project Cards */}
+                    {projectCards.map(({ project, services, onlineCount, totalServices }) => {
+                      let statusClass = styles.cockpitStatusOffline;
+                      let statusText = "Offline";
+                      if (onlineCount === totalServices && totalServices > 0) {
+                        statusClass = styles.cockpitStatusOnline;
+                        statusText = `${onlineCount}/${totalServices} Online`;
+                      } else if (onlineCount > 0) {
+                        statusClass = styles.cockpitStatusPartial;
+                        statusText = `${onlineCount}/${totalServices} Online`;
+                      } else if (totalServices > 0) {
+                        statusText = `0/${totalServices} Online`;
+                      }
+
+                      return (
+                        <div key={project.name} className={styles.cockpitCard}>
+                          <div className={styles.cockpitCardHeader}>
+                            <div className={styles.cockpitCardTitleGroup}>
+                              <div className={styles.cockpitCardTitle}>{project.name}</div>
+                              {project.repository && (
+                                <a
+                                  href={project.repository.startsWith("http") ? project.repository : `https://github.com/${project.repository}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className={styles.cockpitRepoBadge}
+                                  title="GitHub Repository öffnen"
+                                >
+                                  <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
+                                    <path fillRule="evenodd" clipRule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.53 1.032 1.53 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"/>
+                                  </svg>
+                                  <span>{project.repository}</span>
+                                </a>
+                              )}
+                              {project.category && (
+                                <span style={{ fontSize: "0.75rem", color: "var(--text-muted)", background: "rgba(255,255,255,0.03)", padding: "0.15rem 0.5rem", borderRadius: "12px", border: "1px solid var(--border-glass)" }}>
+                                  {project.category}
+                                </span>
+                              )}
+                            </div>
+
+                            <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+                              <span className={`${styles.cockpitStatusBadge} ${statusClass}`}>
+                                <span style={{ width: 6, height: 6, borderRadius: "50%", background: "currentColor", display: "inline-block" }}></span>
+                                {statusText}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => setActiveTab("projects")}
+                                className={styles.actionBtn}
+                                style={{ fontSize: "0.8rem", padding: "0.3rem 0.6rem", height: "auto", display: "inline-flex", alignItems: "center", gap: "0.35rem" }}
+                                title="In Projekt-Verwaltung öffnen / Konfigurieren"
+                              >
+                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                  <circle cx="12" cy="12" r="3"></circle>
+                                  <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+                                </svg>
+                                Setup
+                              </button>
+                            </div>
+                          </div>
+
+                          {/* Services in this Project */}
+                          <div className={styles.cockpitServicesList}>
+                            {services.map(({ service, proc, res, procName }) => {
+                              const isStarting = actionInProgress[`${procName}-start`];
+                              const isStopping = actionInProgress[`${procName}-stop`];
+                              const isRestarting = actionInProgress[`${procName}-restart`];
+                              const isAnyAction = isStarting || isStopping || isRestarting;
+                              const isOnline = proc?.status === "online";
+
+                              return (
+                                <div key={service.name} className={styles.cockpitServiceItem}>
+                                  {/* Left: Service & PM2 name */}
+                                  <div className={styles.cockpitServiceInfo}>
+                                    <div className={styles.cockpitServiceName}>
+                                      <span>{service.name}</span>
+                                      {proc && proc.name.toLowerCase() !== service.name.toLowerCase() && (
+                                        <span style={{ fontSize: "0.75rem", color: "var(--text-muted)", fontWeight: 400 }}>
+                                          (PM2: {proc.name})
+                                        </span>
+                                      )}
+                                      {!proc && (
+                                        <span style={{ fontSize: "0.72rem", color: "var(--text-muted)", fontStyle: "italic" }}>
+                                          (nicht in PM2)
+                                        </span>
+                                      )}
+                                    </div>
+                                    <div className={styles.cockpitServiceMeta}>
+                                      {proc ? getStatusBadge(proc.status) : (
+                                        <span className={`${styles.statusBadge} ${styles.statusStopped}`}>
+                                          gestoppt
+                                        </span>
+                                      )}
+                                      {proc && proc.pid > 0 && (
+                                        <span className={styles.pmId}>PID: {proc.pid}</span>
+                                      )}
+                                      {service.envPath && (
+                                        <span style={{ fontSize: "0.75rem", color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
+                                          {service.envPath}
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
+
+                                  {/* Middle: Linked Resources (DB, Port, Domain) */}
+                                  <div>
+                                    <div className={styles.resourceBoxesWrapper}>
+                                      {/* Database */}
+                                      {res.db ? (
+                                        <span
+                                          className={`${styles.resourceBox} ${styles.resourceBoxDb}`}
+                                          onClick={() => setActiveTab("databases")}
+                                          title={`Datenbank: ${res.db.alias} (${res.db.type ? res.db.type.toUpperCase() : 'DB'}) - Klick zum Öffnen`}
+                                        >
+                                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                            <ellipse cx="12" cy="5" rx="9" ry="3"></ellipse>
+                                            <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path>
+                                            <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path>
+                                          </svg>
+                                          <span className={styles.resourceBoxValue}>{res.db.alias}</span>
+                                          {res.db.port && <span className={styles.resourceBoxLabel}>:{res.db.port}</span>}
+                                        </span>
+                                      ) : (
+                                        <button
+                                          type="button"
+                                          className={`${styles.resourceBox} ${styles.resourceBoxEmpty}`}
+                                          onClick={() => openProcessLinkModal(procName)}
+                                          title="Datenbank zuweisen"
+                                        >
+                                          + DB
+                                        </button>
+                                      )}
+
+                                      {/* Port */}
+                                      {res.port ? (
+                                        <a
+                                          href={`http://localhost:${res.port}`}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          className={`${styles.resourceBox} ${styles.resourceBoxPort}`}
+                                          title={`Lokaler Port ${res.port} (im Browser öffnen)`}
+                                        >
+                                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                            <circle cx="12" cy="12" r="10"></circle>
+                                            <line x1="12" y1="8" x2="12" y2="12"></line>
+                                            <line x1="12" y1="16" x2="12.01" y2="16"></line>
+                                          </svg>
+                                          <span className={styles.resourceBoxLabel}>Port:</span>
+                                          <span className={styles.resourceBoxValue}>{res.port}</span>
+                                        </a>
+                                      ) : (
+                                        <button
+                                          type="button"
+                                          className={`${styles.resourceBox} ${styles.resourceBoxEmpty}`}
+                                          onClick={() => openProcessLinkModal(procName)}
+                                          title="Port zuweisen"
+                                        >
+                                          + Port
+                                        </button>
+                                      )}
+
+                                      {/* Domain */}
+                                      {res.domain ? (
+                                        <a
+                                          href={`http${res.domain.sslEnabled ? "s" : ""}://${res.domain.domain}`}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          className={`${styles.resourceBox} ${styles.resourceBoxDomain}`}
+                                          title={`Domain: ${res.domain.domain} (im Browser öffnen)`}
+                                        >
+                                          {res.domain.sslEnabled ? (
+                                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                              <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                                              <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                                            </svg>
+                                          ) : (
+                                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                              <circle cx="12" cy="12" r="10"></circle>
+                                              <line x1="2" y1="12" x2="22" y2="12"></line>
+                                              <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1 4-10z"></path>
+                                            </svg>
+                                          )}
+                                          <span className={styles.resourceBoxValue}>{res.domain.domain}</span>
+                                        </a>
+                                      ) : (
+                                        <button
+                                          type="button"
+                                          className={`${styles.resourceBox} ${styles.resourceBoxEmpty}`}
+                                          onClick={() => openProcessLinkModal(procName)}
+                                          title="Domain zuweisen"
+                                        >
+                                          + Domain
+                                        </button>
+                                      )}
+
+                                      {/* Edit Modal */}
+                                      <button
+                                        type="button"
+                                        className={styles.resourceBoxEditBtn}
+                                        onClick={() => openProcessLinkModal(procName)}
+                                        title="Ressourcen verknüpfen"
+                                      >
+                                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                          <path d="M12 20h9"></path>
+                                          <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
+                                        </svg>
+                                      </button>
+                                    </div>
+                                  </div>
+
+                                  {/* Right: Metrics */}
+                                  <div className={styles.cockpitServiceMetrics}>
+                                    <div className={styles.metricItem}>
+                                      <span className={styles.metricLabel}>CPU</span>
+                                      <span>{isOnline ? `${proc?.cpu}%` : "—"}</span>
+                                    </div>
+                                    <div className={styles.metricItem}>
+                                      <span className={styles.metricLabel}>RAM</span>
+                                      <span>{isOnline && proc ? formatMemory(proc.memory) : "—"}</span>
+                                    </div>
+                                    <div className={styles.metricItem}>
+                                      <span className={styles.metricLabel}>Restarts</span>
+                                      <span>{proc ? proc.restarts : "—"}</span>
+                                    </div>
+                                    <div className={styles.metricItem}>
+                                      <span className={styles.metricLabel}>Uptime</span>
+                                      <span>{isOnline && proc ? formatUptime(proc.uptime) : "—"}</span>
+                                    </div>
+                                  </div>
+
+                                  {/* Actions */}
+                                  <div className={styles.actionsCell}>
+                                    {isOnline ? (
+                                      <button
+                                        onClick={() => handleProcessAction(procName, "stop")}
+                                        disabled={isAnyAction}
+                                        className={`${styles.actionBtn} ${styles.actionBtnStop}`}
+                                        title="Stoppen"
+                                      >
+                                        {isStopping ? (
+                                          <svg className="spinner" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10" strokeDasharray="30 15"></circle></svg>
+                                        ) : (
+                                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect></svg>
+                                        )}
+                                      </button>
+                                    ) : (
+                                      <button
+                                        onClick={() => handleProcessAction(procName, "start")}
+                                        disabled={isAnyAction}
+                                        className={`${styles.actionBtn} ${styles.actionBtnStart}`}
+                                        title="Starten"
+                                      >
+                                        {isStarting ? (
+                                          <svg className="spinner" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10" strokeDasharray="30 15"></circle></svg>
+                                        ) : (
+                                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                                        )}
+                                      </button>
+                                    )}
+
+                                    <button
+                                      onClick={() => handleProcessAction(procName, "restart")}
+                                      disabled={isAnyAction}
+                                      className={`${styles.actionBtn} ${styles.actionBtnRestart}`}
+                                      title="Neustarten"
+                                    >
+                                      {isRestarting ? (
+                                        <svg className="spinner" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10" strokeDasharray="30 15"></circle></svg>
+                                      ) : (
+                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"></path></svg>
+                                      )}
+                                    </button>
+
+                                    <button
+                                      onClick={() => {
+                                        if (selectedProcess?.name === procName) {
+                                          setSelectedProcess(null);
+                                          setLogs([]);
+                                        } else {
+                                          if (proc) {
+                                            setSelectedProcess(proc);
+                                          } else {
+                                            setSelectedProcess({
+                                              id: -1,
+                                              name: procName,
+                                              pid: 0,
+                                              status: "stopped",
+                                              cpu: 0,
+                                              memory: 0,
+                                              uptime: 0,
+                                              restarts: 0,
+                                            });
+                                          }
+                                        }
+                                      }}
+                                      className={styles.actionBtn}
+                                      style={{
+                                        background: selectedProcess?.name === procName ? "rgba(59, 130, 246, 0.2)" : undefined,
+                                        borderColor: selectedProcess?.name === procName ? "var(--primary)" : undefined,
+                                        color: selectedProcess?.name === procName ? "#fff" : undefined,
+                                      }}
+                                      title="Logs anzeigen"
+                                    >
+                                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                                        <polyline points="14 2 14 8 20 8"></polyline>
+                                        <line x1="16" y1="13" x2="8" y2="13"></line>
+                                        <line x1="16" y1="17" x2="8" y2="17"></line>
+                                        <polyline points="10 9 9 9 8 9"></polyline>
+                                      </svg>
+                                    </button>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })}
+
+                    {/* Standalone Processes Section */}
+                    {standaloneProcesses.length > 0 && (
+                      <div className={styles.standaloneCard}>
+                        <div className={styles.standaloneHeader}>
+                          <div>
+                            <span style={{ fontWeight: 600, color: "#fff", fontSize: "0.95rem" }}>
+                              Weitere Server-Prozesse (Ungebunden)
+                            </span>
+                            <span style={{ marginLeft: "0.6rem", fontSize: "0.78rem", color: "var(--text-muted)" }}>
+                              Eigenständige PM2-Prozesse ohne verknüpftes Projekt/Repository
+                            </span>
+                          </div>
+                          <span className={styles.badge} style={{ fontSize: "0.75rem" }}>
+                            {standaloneProcesses.length} {standaloneProcesses.length === 1 ? "Prozess" : "Prozesse"}
+                          </span>
+                        </div>
+
+                        <div className={styles.cockpitServicesList}>
+                          {standaloneProcesses.map((proc) => {
+                            const isStarting = actionInProgress[`${proc.name}-start`];
+                            const isStopping = actionInProgress[`${proc.name}-stop`];
+                            const isRestarting = actionInProgress[`${proc.name}-restart`];
+                            const isAnyAction = isStarting || isStopping || isRestarting;
+                            const isOnline = proc.status === "online";
+                            const res = getProcessResources(proc.name);
+
+                            return (
+                              <div key={proc.id + "-" + proc.name} className={styles.cockpitServiceItem}>
+                                <div className={styles.cockpitServiceInfo}>
+                                  <div className={styles.cockpitServiceName}>
+                                    <span>{proc.name}</span>
+                                    <span className={styles.pmId}>ID: {proc.id}</span>
+                                  </div>
+                                  <div className={styles.cockpitServiceMeta}>
+                                    {getStatusBadge(proc.status)}
+                                    {proc.pid > 0 && <span className={styles.pmId}>PID: {proc.pid}</span>}
+                                  </div>
+                                </div>
+
+                                <div>
+                                  <div className={styles.resourceBoxesWrapper}>
+                                    {res.db ? (
+                                      <span
+                                        className={`${styles.resourceBox} ${styles.resourceBoxDb}`}
+                                        onClick={() => setActiveTab("databases")}
+                                        title={`Datenbank: ${res.db.alias} (${res.db.type ? res.db.type.toUpperCase() : 'DB'})`}
+                                      >
+                                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                          <ellipse cx="12" cy="5" rx="9" ry="3"></ellipse>
+                                          <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path>
+                                          <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path>
+                                        </svg>
+                                        <span className={styles.resourceBoxValue}>{res.db.alias}</span>
+                                      </span>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        className={`${styles.resourceBox} ${styles.resourceBoxEmpty}`}
+                                        onClick={() => openProcessLinkModal(proc.name)}
+                                        title="Datenbank zuweisen"
+                                      >
+                                        + DB
+                                      </button>
+                                    )}
+
+                                    {res.port ? (
+                                      <a
+                                        href={`http://localhost:${res.port}`}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className={`${styles.resourceBox} ${styles.resourceBoxPort}`}
+                                      >
+                                        <span className={styles.resourceBoxLabel}>Port:</span>
+                                        <span className={styles.resourceBoxValue}>{res.port}</span>
+                                      </a>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        className={`${styles.resourceBox} ${styles.resourceBoxEmpty}`}
+                                        onClick={() => openProcessLinkModal(proc.name)}
+                                        title="Port zuweisen"
+                                      >
+                                        + Port
+                                      </button>
+                                    )}
+
+                                    {res.domain ? (
+                                      <a
+                                        href={`http${res.domain.sslEnabled ? "s" : ""}://${res.domain.domain}`}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className={`${styles.resourceBox} ${styles.resourceBoxDomain}`}
+                                      >
+                                        <span className={styles.resourceBoxValue}>{res.domain.domain}</span>
+                                      </a>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        className={`${styles.resourceBox} ${styles.resourceBoxEmpty}`}
+                                        onClick={() => openProcessLinkModal(proc.name)}
+                                        title="Domain zuweisen"
+                                      >
+                                        + Domain
+                                      </button>
+                                    )}
+
+                                    <button
+                                      type="button"
+                                      className={styles.resourceBoxEditBtn}
+                                      onClick={() => openProcessLinkModal(proc.name)}
+                                      title="Ressourcen verknüpfen"
+                                    >
+                                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                        <path d="M12 20h9"></path>
+                                        <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
+                                      </svg>
+                                    </button>
+                                  </div>
+                                </div>
+
+                                <div className={styles.cockpitServiceMetrics}>
+                                  <div className={styles.metricItem}>
+                                    <span className={styles.metricLabel}>CPU</span>
+                                    <span>{isOnline ? `${proc.cpu}%` : "—"}</span>
+                                  </div>
+                                  <div className={styles.metricItem}>
+                                    <span className={styles.metricLabel}>RAM</span>
+                                    <span>{isOnline ? formatMemory(proc.memory) : "—"}</span>
+                                  </div>
+                                  <div className={styles.metricItem}>
+                                    <span className={styles.metricLabel}>Restarts</span>
+                                    <span>{proc.restarts}</span>
+                                  </div>
+                                  <div className={styles.metricItem}>
+                                    <span className={styles.metricLabel}>Uptime</span>
+                                    <span>{isOnline ? formatUptime(proc.uptime) : "—"}</span>
+                                  </div>
+                                </div>
+
+                                <div className={styles.actionsCell}>
+                                  {isOnline ? (
+                                    <button
+                                      onClick={() => handleProcessAction(proc.name, "stop")}
+                                      disabled={isAnyAction}
+                                      className={`${styles.actionBtn} ${styles.actionBtnStop}`}
+                                      title="Stoppen"
+                                    >
+                                      {isStopping ? (
+                                        <svg className="spinner" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10" strokeDasharray="30 15"></circle></svg>
+                                      ) : (
+                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect></svg>
+                                      )}
+                                    </button>
+                                  ) : (
+                                    <button
+                                      onClick={() => handleProcessAction(proc.name, "start")}
+                                      disabled={isAnyAction}
+                                      className={`${styles.actionBtn} ${styles.actionBtnStart}`}
+                                      title="Starten"
+                                    >
+                                      {isStarting ? (
+                                        <svg className="spinner" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10" strokeDasharray="30 15"></circle></svg>
+                                      ) : (
+                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                                      )}
+                                    </button>
+                                  )}
+
+                                  <button
+                                    onClick={() => handleProcessAction(proc.name, "restart")}
+                                    disabled={isAnyAction}
+                                    className={`${styles.actionBtn} ${styles.actionBtnRestart}`}
+                                    title="Neustarten"
+                                  >
+                                    {isRestarting ? (
+                                      <svg className="spinner" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10" strokeDasharray="30 15"></circle></svg>
+                                    ) : (
+                                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"></path></svg>
+                                    )}
+                                  </button>
+
+                                  <button
+                                    onClick={() => {
+                                      if (selectedProcess?.name === proc.name) {
+                                        setSelectedProcess(null);
+                                        setLogs([]);
+                                      } else {
+                                        setSelectedProcess(proc);
+                                      }
+                                    }}
+                                    className={styles.actionBtn}
+                                    style={{
+                                      background: selectedProcess?.name === proc.name ? "rgba(59, 130, 246, 0.2)" : undefined,
+                                      borderColor: selectedProcess?.name === proc.name ? "var(--primary)" : undefined,
+                                      color: selectedProcess?.name === proc.name ? "#fff" : undefined,
+                                    }}
+                                    title="Logs anzeigen"
+                                  >
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                                      <polyline points="14 2 14 8 20 8"></polyline>
+                                      <line x1="16" y1="13" x2="8" y2="13"></line>
+                                      <line x1="16" y1="17" x2="8" y2="17"></line>
+                                      <polyline points="10 9 9 9 8 9"></polyline>
+                                    </svg>
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()
             ) : (
               <div className={styles.tableWrapper}>
                 <table className={styles.processTable}>
@@ -2234,7 +2849,7 @@ export default function DashboardPage() {
                                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                                       <circle cx="12" cy="12" r="10"></circle>
                                       <line x1="2" y1="12" x2="22" y2="12"></line>
-                                      <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+                                      <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1 4-10z"></path>
                                     </svg>
                                   )}
                                   <span className={styles.resourceBoxValue}>{res.domain.domain}</span>
