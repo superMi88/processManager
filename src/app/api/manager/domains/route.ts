@@ -19,8 +19,10 @@ function resolveProjectPort(projectName: string, store: ReturnType<typeof readSt
   const proj = discovered.find(p => p.declaration.name === projectName);
   if (!proj) return null;
   
+  const reqs = proj.declaration.requirements || [];
+
   // 1. Check mapped credentials/textinputs to find one with value parsed as port number
-  for (const req of proj.declaration.requirements) {
+  for (const req of reqs) {
     if (req.type === "credential") {
       const resourceId = projectLinks[req.key];
       if (resourceId) {
@@ -47,7 +49,7 @@ function resolveProjectPort(projectName: string, store: ReturnType<typeof readSt
   }
 
   // 2. Fallback check: check any mapped credential/textinput that is a number
-  for (const req of proj.declaration.requirements) {
+  for (const req of reqs) {
     if (req.type === "credential") {
       const resourceId = projectLinks[req.key];
       if (resourceId) {

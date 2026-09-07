@@ -17,7 +17,9 @@ export async function GET() {
       return {
         name,
         path: p.projectPath,
-        requirements: p.declaration.requirements,
+        repository: p.declaration.repository,
+        services: p.declaration.services,
+        requirements: p.declaration.requirements || [],
         links: store.links[name] || {},
         hasPrisma: p.hasPrisma,
         hasMigrations: p.hasMigrations
@@ -33,7 +35,7 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
-    const { action, projectName, links } = await request.json();
+    const { action, projectName, serviceName, links } = await request.json();
     const store = readStore();
     
     if (!projectName) {
@@ -50,7 +52,7 @@ export async function POST(request: Request) {
       }
       
       if (action === "apply") {
-        const result = await applyProjectEnvironment(projectName);
+        const result = await applyProjectEnvironment(projectName, serviceName);
         if (!result.success) {
           return NextResponse.json({ error: result.error || "Failed to apply environment variables" }, { status: 500 });
         }

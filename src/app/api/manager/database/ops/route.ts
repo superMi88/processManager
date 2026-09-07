@@ -188,7 +188,7 @@ export async function POST(request: Request) {
       // Check linked database
       const projectLinks = store.links[projectName] || {};
       // Find a requirement of type "database"
-      const dbReq = project.declaration.requirements.find(r => r.type === "database");
+      const dbReq = (project.declaration.requirements || []).find(r => r.type === "database");
       if (!dbReq) {
         return NextResponse.json({ error: `Projekt '${projectName}' erfordert keine Datenbank.` }, { status: 400 });
       }
