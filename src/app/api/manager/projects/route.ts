@@ -14,11 +14,23 @@ export async function GET() {
     // Map discovered projects to include their current mapping from the store
     const projects = discovered.map(p => {
       const name = p.declaration.name;
+      const servicesWithLinks = p.declaration.services.map(s => {
+        const serviceKey = `${name}/${s.name}`;
+        const serviceLinks = store.links[serviceKey] 
+          || store.links[s.name] 
+          || (p.declaration.services.length === 1 ? store.links[name] : {})
+          || {};
+        return {
+          ...s,
+          links: serviceLinks
+        };
+      });
+
       return {
         name,
         path: p.projectPath,
         repository: p.declaration.repository,
-        services: p.declaration.services,
+        services: servicesWithLinks,
         requirements: p.declaration.requirements || [],
         links: store.links[name] || {},
         hasPrisma: p.hasPrisma,
@@ -43,8 +55,13 @@ export async function POST(request: Request) {
     }
     
     if (action === "link" || action === "apply") {
+      const targetKey = serviceName ? `${projectName}/${serviceName}` : projectName;
       if (links) {
-        store.links[projectName] = links;
+        store.links[targetKey] = links;
+        // If there's no serviceName, also set store.links[projectName]
+        if (!serviceName) {
+          store.links[projectName] = links;
+        }
         const success = writeStore(store);
         if (!success) {
           return NextResponse.json({ error: "Failed to save links to store" }, { status: 500 });
@@ -56,10 +73,13 @@ export async function POST(request: Request) {
         if (!result.success) {
           return NextResponse.json({ error: result.error || "Failed to apply environment variables" }, { status: 500 });
         }
-        return NextResponse.json({ success: true, message: `Environment variables successfully applied to '${projectName}'.` });
+        return NextResponse.json({ 
+          success: true, 
+          message: `Environment variables successfully applied to '${projectName}'${serviceName ? ` (${serviceName})` : ""}.` 
+        });
       }
       
-      return NextResponse.json({ success: true, links: store.links[projectName] });
+      return NextResponse.json({ success: true, links: store.links[targetKey] });
     } else {
       return NextResponse.json({ error: "Invalid action" }, { status: 400 });
     }

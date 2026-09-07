@@ -61,7 +61,9 @@ interface RegisteredCredential {
 
 interface ProjectRequirement {
   key: string;
-  type: "database" | "credential" | "textinput" | "text";
+  type: "database" | "credential" | "textinput" | "text" | "port" | "domain" | "secret";
+  label?: string;
+  defaultValue?: string;
   dbType?: "postgres" | "mongodb";
   description?: string;
 }
@@ -81,6 +83,7 @@ interface ProjectServiceDeclaration {
   pm2Process?: string;
   domain?: string;
   requirements: ProjectRequirement[];
+  links?: Record<string, string>;
 }
 
 interface DiscoveredProject {
@@ -152,6 +155,33 @@ export default function DashboardPage() {
   const [isSavingProcessLink, setIsSavingProcessLink] = useState(false);
   const [processLinkError, setProcessLinkError] = useState<string | null>(null);
   const [dashboardViewMode, setDashboardViewMode] = useState<"cockpit" | "table">("cockpit");
+  
+  // .env Editor modal state
+  const [envEditorState, setEnvEditorState] = useState<{
+    isOpen: boolean;
+    projectName: string;
+    serviceName?: string;
+    pm2Process?: string;
+    envPath?: string;
+    envRelPath?: string;
+    content: string;
+    initialContent: string;
+    isLoading: boolean;
+    isSaving: boolean;
+    error: string | null;
+    successMessage: string | null;
+    activeMode: "editor" | "resources";
+  }>({
+    isOpen: false,
+    projectName: "",
+    content: "",
+    initialContent: "",
+    isLoading: false,
+    isSaving: false,
+    error: null,
+    successMessage: null,
+    activeMode: "editor",
+  });
   
   // Google Key Form states
   const [googleAlias, setGoogleAlias] = useState("");
@@ -798,6 +828,13 @@ export default function DashboardPage() {
         const links: Record<string, Record<string, string>> = {};
         for (const p of data.projects || []) {
           links[p.name] = { ...p.links };
+          if (p.services && Array.isArray(p.services)) {
+            for (const s of p.services) {
+              if (s.links) {
+                links[`${p.name}/${s.name}`] = { ...s.links };
+              }
+            }
+          }
         }
         setPendingLinks(links);
       }
@@ -886,6 +923,10 @@ export default function DashboardPage() {
     }
 
     const effectiveRequirements = matchedService?.requirements || matchedProj?.requirements || [];
+    const effectiveLinks: Record<string, string> = {
+      ...(matchedProj?.links || {}),
+      ...(matchedService?.links || {})
+    };
 
     // Resolve DB
     let resolvedDb: {
@@ -907,7 +948,7 @@ export default function DashboardPage() {
     if (!resolvedDb && matchedProj) {
       for (const req of effectiveRequirements) {
         if (req.type === "database" || req.key.toLowerCase().includes("database") || req.key.toLowerCase().includes("db")) {
-          const lId = matchedProj.links?.[req.key];
+          const lId = effectiveLinks[req.key];
           if (lId) {
             const reg = registeredDbs.find(d => d.id === lId);
             if (reg) {
@@ -935,7 +976,7 @@ export default function DashboardPage() {
     if (!port && matchedProj) {
       for (const req of effectiveRequirements) {
         if (req.key === "PORT" || req.key.includes("PORT")) {
-          const mappedVal = matchedProj.links?.[req.key];
+          const mappedVal = effectiveLinks[req.key];
           if (mappedVal) {
             const cred = registeredCreds.find(c => c.id === mappedVal);
             if (cred && cred.value) {
@@ -960,14 +1001,35 @@ export default function DashboardPage() {
 
     // Resolve Domain
     let resolvedDomain: { domain: string; sslEnabled: boolean } | null = null;
-    const effectiveDomainStr = domainStr || matchedService?.domain;
-    if (effectiveDomainStr) {
+    let effectiveDomainStr = domainStr || matchedService?.domain;
+    
+    if (!effectiveDomainStr && matchedProj) {
+      for (const req of effectiveRequirements) {
+        if (req.type === "domain" || req.key.toLowerCase().includes("domain")) {
+          const mappedVal = effectiveLinks[req.key];
+          if (mappedVal) {
+            const regDom = registeredDomains.find(d => d.id === mappedVal || d.domain.toLowerCase() === mappedVal.toLowerCase());
+            if (regDom) {
+              resolvedDomain = { domain: regDom.domain, sslEnabled: regDom.sslEnabled };
+              effectiveDomainStr = regDom.domain;
+              break;
+            } else {
+              resolvedDomain = { domain: mappedVal, sslEnabled: mappedVal.startsWith("https://") };
+              effectiveDomainStr = mappedVal;
+              break;
+            }
+          }
+        }
+      }
+    }
+
+    if (!resolvedDomain && effectiveDomainStr) {
       const regDom = registeredDomains.find(d => d.domain.toLowerCase() === effectiveDomainStr.toLowerCase());
       resolvedDomain = {
         domain: effectiveDomainStr,
         sslEnabled: regDom?.sslEnabled ?? false
       };
-    } else {
+    } else if (!resolvedDomain) {
       const matchDom = registeredDomains.find(d => {
         if (d.targetType === "project") {
           const tNorm = d.targetValue.toLowerCase().replace(/[-_]/g, "");
@@ -1603,31 +1665,34 @@ export default function DashboardPage() {
 
 
   // Handle mapping updates in dropdowns
-  const handleLinkChange = (projectName: string, envKey: string, resourceId: string) => {
+  const handleLinkChange = (projectName: string, serviceName: string | undefined, envKey: string, resourceId: string) => {
+    const targetKey = serviceName ? `${projectName}/${serviceName}` : projectName;
     setPendingLinks(prev => ({
       ...prev,
-      [projectName]: {
-        ...(prev[projectName] || {}),
+      [targetKey]: {
+        ...(prev[targetKey] || {}),
         [envKey]: resourceId
       }
     }));
   };
 
-  // Save and apply mappings
-  const handleApplyProject = async (projectName: string) => {
-    setIsSavingProject(prev => ({ ...prev, [projectName]: true }));
+  // Save and apply mappings (supports whole project or specific service)
+  const handleApplyProject = async (projectName: string, serviceName?: string) => {
+    const targetKey = serviceName ? `${projectName}/${serviceName}` : projectName;
+    setIsSavingProject(prev => ({ ...prev, [targetKey]: true }));
     try {
-      const links = pendingLinks[projectName] || {};
+      const links = pendingLinks[targetKey] || pendingLinks[projectName] || {};
       const res = await fetch("/api/manager/projects", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "apply", projectName, links })
+        body: JSON.stringify({ action: "apply", projectName, serviceName, links })
       });
       
       const data = await res.json();
       if (res.ok) {
-        alert(data.message || `Verknüpfungen für ${projectName} erfolgreich angewendet!`);
+        alert(data.message || `Verknüpfungen für ${projectName}${serviceName ? ` (${serviceName})` : ""} erfolgreich angewendet!`);
         fetchProjects();
+        fetchProcesses();
       } else {
         alert(`Fehler beim Anwenden: ${data.error}`);
       }
@@ -1635,7 +1700,100 @@ export default function DashboardPage() {
       console.error(err);
       alert("Fehler beim Anwenden der Konfiguration.");
     } finally {
-      setIsSavingProject(prev => ({ ...prev, [projectName]: false }));
+      setIsSavingProject(prev => ({ ...prev, [targetKey]: false }));
+    }
+  };
+
+  // Open .env editor modal
+  const openEnvEditor = async (projectName: string, serviceName?: string, pm2Process?: string, envRelPath?: string) => {
+    setEnvEditorState({
+      isOpen: true,
+      projectName,
+      serviceName,
+      pm2Process,
+      envPath: "",
+      envRelPath: envRelPath || ".env",
+      content: "",
+      initialContent: "",
+      isLoading: true,
+      isSaving: false,
+      error: null,
+      successMessage: null,
+      activeMode: "editor",
+    });
+
+    try {
+      const params = new URLSearchParams({ project: projectName });
+      if (serviceName) params.append("service", serviceName);
+      const res = await fetch(`/api/manager/projects/env?${params.toString()}`);
+      const data = await res.json();
+      if (res.ok) {
+        setEnvEditorState(prev => ({
+          ...prev,
+          isLoading: false,
+          content: data.content || "",
+          initialContent: data.content || "",
+          envPath: data.envPath || "",
+          envRelPath: data.envRelPath || prev.envRelPath,
+        }));
+      } else {
+        setEnvEditorState(prev => ({
+          ...prev,
+          isLoading: false,
+          error: data.error || "Fehler beim Laden der .env Datei",
+        }));
+      }
+    } catch {
+      setEnvEditorState(prev => ({
+        ...prev,
+        isLoading: false,
+        error: "Netzwerkfehler beim Laden der .env Datei",
+      }));
+    }
+  };
+
+  const closeEnvEditor = () => {
+    setEnvEditorState(prev => ({ ...prev, isOpen: false }));
+  };
+
+  const handleSaveEnvFile = async (restartPm2: boolean = true) => {
+    if (!envEditorState.projectName) return;
+    setEnvEditorState(prev => ({ ...prev, isSaving: true, error: null, successMessage: null }));
+
+    try {
+      const res = await fetch("/api/manager/projects/env", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          project: envEditorState.projectName,
+          service: envEditorState.serviceName,
+          content: envEditorState.content,
+          restart: restartPm2,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setEnvEditorState(prev => ({
+          ...prev,
+          isSaving: false,
+          initialContent: prev.content,
+          successMessage: `Datei erfolgreich gespeichert${restartPm2 && data.restarted ? " & PM2-Dienst neu gestartet!" : "!"}`,
+        }));
+        fetchProcesses();
+        fetchProjects();
+      } else {
+        setEnvEditorState(prev => ({
+          ...prev,
+          isSaving: false,
+          error: data.error || "Fehler beim Speichern der .env Datei",
+        }));
+      }
+    } catch {
+      setEnvEditorState(prev => ({
+        ...prev,
+        isSaving: false,
+        error: "Netzwerkfehler beim Speichern der .env Datei",
+      }));
     }
   };
 
@@ -2241,11 +2399,26 @@ export default function DashboardPage() {
                               )}
                             </div>
 
-                            <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
                               <span className={`${styles.cockpitStatusBadge} ${statusClass}`}>
                                 <span style={{ width: 6, height: 6, borderRadius: "50%", background: "currentColor", display: "inline-block" }}></span>
                                 {statusText}
                               </span>
+                              <button
+                                type="button"
+                                onClick={() => openEnvEditor(project.name, services[0]?.service?.name, services[0]?.service?.pm2Process, services[0]?.service?.envPath)}
+                                className={styles.actionBtn}
+                                style={{ fontSize: "0.8rem", padding: "0.3rem 0.6rem", height: "auto", display: "inline-flex", alignItems: "center", gap: "0.35rem" }}
+                                title=".env-Datei direkt einsehen und bearbeiten"
+                              >
+                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                                  <polyline points="14 2 14 8 20 8"></polyline>
+                                  <line x1="16" y1="13" x2="8" y2="13"></line>
+                                  <line x1="16" y1="17" x2="8" y2="17"></line>
+                                </svg>
+                                .env
+                              </button>
                               <button
                                 type="button"
                                 onClick={() => setActiveTab("projects")}
@@ -2302,6 +2475,18 @@ export default function DashboardPage() {
                                           {service.envPath}
                                         </span>
                                       )}
+                                      <button
+                                        type="button"
+                                        onClick={() => openEnvEditor(project.name, service.name, service.pm2Process, service.envPath)}
+                                        className={styles.envEditorBtn}
+                                        title={`.env-Datei für ${service.name} (${service.envPath || '.env'}) bearbeiten`}
+                                      >
+                                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                          <path d="M12 20h9"></path>
+                                          <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
+                                        </svg>
+                                        <span>.env</span>
+                                      </button>
                                     </div>
                                   </div>
 
@@ -4026,119 +4211,307 @@ export default function DashboardPage() {
                     </button>
                   </div>
 
-                  <table className={styles.mappingTable}>
-                    <thead>
-                      <tr>
-                        <th style={{ width: "25%" }}>Umgebungsvariable</th>
-                        <th style={{ width: "35%" }}>Beschreibung</th>
-                        <th style={{ width: "40%" }}>Zugeordnete Ressource</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {proj.requirements.map(req => {
-                        const currentVal = (pendingLinks[proj.name] || {})[req.key] || "";
-                        return (
-                          <tr key={req.key}>
-                            <td>
-                              <span className={styles.mappingKey}>{req.key}</span>
-                            </td>
-                            <td>
-                              <span className={styles.mappingDesc}>{req.description || "Keine Beschreibung hinterlegt"}</span>
-                            </td>
-                            <td>
-                              <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
-                                {req.type === "textinput" || req.type === "text" ? (
-                                  <input 
-                                    type="text"
-                                    value={currentVal}
-                                    onChange={e => handleLinkChange(proj.name, req.key, e.target.value)}
-                                    className={styles.inputField || "input-field"}
-                                    placeholder={req.description || `${req.key} eingeben...`}
-                                  />
+                  {proj.services && proj.services.length > 0 ? (
+                    proj.services.map(svc => {
+                      const serviceKey = `${proj.name}/${svc.name}`;
+                      const isSvcSaving = isSavingProject[serviceKey] || isSavingProject[proj.name];
+                      const reqs = svc.requirements || [];
+
+                      return (
+                        <div key={svc.name} className={styles.serviceGroupCard}>
+                          <div className={styles.serviceGroupHeader}>
+                            <div className={styles.serviceGroupTitle}>
+                              <span>Dienst: {svc.name}</span>
+                              {svc.pm2Process && (
+                                <span style={{ fontSize: "0.75rem", fontFamily: "var(--font-mono)", color: "var(--primary)", background: "rgba(59,130,246,0.1)", padding: "0.15rem 0.4rem", borderRadius: "4px" }}>
+                                  PM2: {svc.pm2Process}
+                                </span>
+                              )}
+                              {svc.envPath && (
+                                <span style={{ fontSize: "0.75rem", fontFamily: "var(--font-mono)", color: "var(--text-muted)", background: "rgba(255,255,255,0.04)", padding: "0.15rem 0.4rem", borderRadius: "4px" }}>
+                                  {svc.envPath}
+                                </span>
+                              )}
+                            </div>
+
+                            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                              <button
+                                type="button"
+                                onClick={() => openEnvEditor(proj.name, svc.name, svc.pm2Process, svc.envPath)}
+                                className="btn btn-secondary"
+                                style={{ fontSize: "0.8rem", padding: "0.35rem 0.65rem", display: "inline-flex", alignItems: "center", gap: "0.35rem" }}
+                                title=".env-Datei direkt im Editor bearbeiten"
+                              >
+                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                  <path d="M12 20h9"></path>
+                                  <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
+                                </svg>
+                                <span>.env bearbeiten</span>
+                              </button>
+                              
+                              <button
+                                type="button"
+                                onClick={() => handleApplyProject(proj.name, svc.name)}
+                                disabled={isSvcSaving}
+                                className="btn btn-primary"
+                                style={{ fontSize: "0.8rem", padding: "0.35rem 0.75rem" }}
+                              >
+                                {isSvcSaving ? (
+                                  <>
+                                    <svg className="spinner" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10" strokeDasharray="30 15"></circle></svg>
+                                    <span>Wird angewendet...</span>
+                                  </>
                                 ) : (
-                                  <select 
-                                    value={currentVal}
-                                    onChange={e => handleLinkChange(proj.name, req.key, e.target.value)}
-                                    className={styles.selectField}
-                                  >
-                                    <option value="">-- Nicht verknüpft (Leerwert) --</option>
-                                    {req.type === "database" ? (
-                                      <optgroup label="Datenbanken (Postgres & MongoDB)">
-                                        {registeredDbs
-                                          .filter(db => !req.dbType || db.type === req.dbType)
-                                          .map(db => (
-                                            <option key={db.id} value={db.id}>
-                                              {db.alias} ({db.type})
-                                            </option>
-                                          ))
-                                        }
-                                      </optgroup>
-                                    ) : (
-                                      <>
-                                        {req.key.toUpperCase().includes("PORT") ? (
-                                          <optgroup label="System Ports">
-                                            {registeredCreds
-                                              .filter(cred => cred.type === "port" || cred.key === "PORT" || cred.key.includes("PORT"))
-                                              .map(cred => (
-                                                <option key={cred.id} value={cred.id}>
-                                                  {cred.alias} ({cred.value})
-                                                </option>
-                                              ))
-                                            }
-                                          </optgroup>
-                                        ) : (
-                                          <optgroup label="Google API & AI Keys">
-                                            {registeredCreds
-                                              .filter(cred => !(cred.type === "port" || cred.key === "PORT" || cred.key.includes("PORT")))
-                                              .map(cred => (
-                                                <option key={cred.id} value={cred.id}>
-                                                  {cred.alias} ({cred.key})
-                                                </option>
-                                              ))
-                                            }
-                                          </optgroup>
-                                        )}
-                                      </>
-                                    )}
-                                  </select>
+                                  <>
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
+                                    <span>Dienst anwenden</span>
+                                  </>
                                 )}
+                              </button>
+                            </div>
+                          </div>
 
-                                {req.type === "database" && currentVal && (
-                                  (() => {
-                                    const selectedDb = registeredDbs.find(d => d.id === currentVal);
-                                    if (!selectedDb) return null;
-                                    
-                                    const selectedAppUserId = (pendingLinks[proj.name] || {})[`${req.key}_USER`] || "";
+                          {reqs.length === 0 ? (
+                            <p style={{ color: "var(--text-muted)", fontSize: "0.85rem", fontStyle: "italic", margin: "0.5rem 0" }}>
+                              Keine Umgebungsvariablen für diesen Dienst deklariert.
+                            </p>
+                          ) : (
+                            <table className={styles.mappingTable}>
+                              <thead>
+                                <tr>
+                                  <th style={{ width: "25%" }}>Umgebungsvariable</th>
+                                  <th style={{ width: "35%" }}>Beschreibung</th>
+                                  <th style={{ width: "40%" }}>Zugeordnete Ressource</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {reqs.map(req => {
+                                  const currentVal = (pendingLinks[serviceKey] || {})[req.key] 
+                                    || (pendingLinks[svc.name] || {})[req.key] 
+                                    || (pendingLinks[proj.name] || {})[req.key] 
+                                    || "";
 
-                                    return (
-                                      <div style={{ background: "rgba(255,255,255,0.02)", padding: "0.5rem", borderRadius: "6px", border: "1px solid var(--border-glass)" }}>
-                                        <div className="input-group" style={{ marginBottom: 0 }}>
-                                          <label className="input-label" style={{ fontSize: "0.7rem", color: "var(--text-secondary)", marginBottom: "0.15rem" }}>App-User (.env)</label>
-                                          <select
-                                            value={selectedAppUserId}
-                                            onChange={e => handleLinkChange(proj.name, `${req.key}_USER`, e.target.value)}
-                                            className={styles.selectField}
-                                            style={{ fontSize: "0.75rem", padding: "0.25rem", height: "auto" }}
-                                          >
-                                            <option value="">Standard</option>
-                                            {selectedDb.users?.map(u => (
-                                              <option key={u.id} value={u.id}>
-                                                {u.username} ({u.alias || "User"})
-                                              </option>
-                                            ))}
-                                          </select>
+                                  return (
+                                    <tr key={req.key}>
+                                      <td>
+                                        <span className={styles.mappingKey}>{req.key}</span>
+                                      </td>
+                                      <td>
+                                        <span className={styles.mappingDesc}>{req.description || "Keine Beschreibung hinterlegt"}</span>
+                                      </td>
+                                      <td>
+                                        <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+                                          {req.type === "textinput" || req.type === "text" ? (
+                                            <input 
+                                              type="text"
+                                              value={currentVal}
+                                              onChange={e => handleLinkChange(proj.name, svc.name, req.key, e.target.value)}
+                                              className={styles.inputField || "input-field"}
+                                              placeholder={req.description || `${req.key} eingeben...`}
+                                            />
+                                          ) : (
+                                            <select 
+                                              value={currentVal}
+                                              onChange={e => handleLinkChange(proj.name, svc.name, req.key, e.target.value)}
+                                              className={styles.selectField}
+                                            >
+                                              <option value="">-- Nicht verknüpft (Leerwert) --</option>
+                                              {req.type === "database" ? (
+                                                <optgroup label="Datenbanken (Postgres & MongoDB)">
+                                                  {registeredDbs
+                                                    .filter(db => !req.dbType || db.type === req.dbType)
+                                                    .map(db => (
+                                                      <option key={db.id} value={db.id}>
+                                                        {db.alias} ({db.type})
+                                                      </option>
+                                                    ))
+                                                  }
+                                                </optgroup>
+                                              ) : (
+                                                <>
+                                                  {req.key.toUpperCase().includes("PORT") ? (
+                                                    <optgroup label="System Ports">
+                                                      {registeredCreds
+                                                        .filter(cred => cred.type === "port" || cred.key === "PORT" || cred.key.includes("PORT"))
+                                                        .map(cred => (
+                                                          <option key={cred.id} value={cred.id}>
+                                                            {cred.alias} ({cred.value})
+                                                          </option>
+                                                        ))
+                                                      }
+                                                    </optgroup>
+                                                  ) : (
+                                                    <optgroup label="Google API & AI Keys">
+                                                      {registeredCreds
+                                                        .filter(cred => !(cred.type === "port" || cred.key === "PORT" || cred.key.includes("PORT")))
+                                                        .map(cred => (
+                                                          <option key={cred.id} value={cred.id}>
+                                                            {cred.alias} ({cred.key})
+                                                          </option>
+                                                        ))
+                                                      }
+                                                    </optgroup>
+                                                  )}
+                                                </>
+                                              )}
+                                            </select>
+                                          )}
+
+                                          {req.type === "database" && currentVal && (
+                                            (() => {
+                                              const selectedDb = registeredDbs.find(d => d.id === currentVal);
+                                              if (!selectedDb) return null;
+                                              
+                                              const selectedAppUserId = (pendingLinks[serviceKey] || pendingLinks[proj.name] || {})[`${req.key}_USER`] || "";
+
+                                              return (
+                                                <div style={{ background: "rgba(255,255,255,0.02)", padding: "0.5rem", borderRadius: "6px", border: "1px solid var(--border-glass)" }}>
+                                                  <div className="input-group" style={{ marginBottom: 0 }}>
+                                                    <label className="input-label" style={{ fontSize: "0.7rem", color: "var(--text-secondary)", marginBottom: "0.15rem" }}>App-User (.env)</label>
+                                                    <select
+                                                      value={selectedAppUserId}
+                                                      onChange={e => handleLinkChange(proj.name, svc.name, `${req.key}_USER`, e.target.value)}
+                                                      className={styles.selectField}
+                                                      style={{ fontSize: "0.75rem", padding: "0.25rem", height: "auto" }}
+                                                    >
+                                                      <option value="">Standard</option>
+                                                      {selectedDb.users?.map(u => (
+                                                        <option key={u.id} value={u.id}>
+                                                          {u.username} ({u.alias || "User"})
+                                                        </option>
+                                                      ))}
+                                                    </select>
+                                                  </div>
+                                                </div>
+                                              );
+                                            })()
+                                          )}
                                         </div>
-                                      </div>
-                                    );
-                                  })()
-                                )}
-                              </div>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          )}
+                        </div>
+                      );
+                    })
+                  ) : (
+                    <table className={styles.mappingTable}>
+                      <thead>
+                        <tr>
+                          <th style={{ width: "25%" }}>Umgebungsvariable</th>
+                          <th style={{ width: "35%" }}>Beschreibung</th>
+                          <th style={{ width: "40%" }}>Zugeordnete Ressource</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {proj.requirements.map(req => {
+                          const currentVal = (pendingLinks[proj.name] || {})[req.key] || "";
+                          return (
+                            <tr key={req.key}>
+                              <td>
+                                <span className={styles.mappingKey}>{req.key}</span>
+                              </td>
+                              <td>
+                                <span className={styles.mappingDesc}>{req.description || "Keine Beschreibung hinterlegt"}</span>
+                              </td>
+                              <td>
+                                <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+                                  {req.type === "textinput" || req.type === "text" ? (
+                                    <input 
+                                      type="text"
+                                      value={currentVal}
+                                      onChange={e => handleLinkChange(proj.name, undefined, req.key, e.target.value)}
+                                      className={styles.inputField || "input-field"}
+                                      placeholder={req.description || `${req.key} eingeben...`}
+                                    />
+                                  ) : (
+                                    <select 
+                                      value={currentVal}
+                                      onChange={e => handleLinkChange(proj.name, undefined, req.key, e.target.value)}
+                                      className={styles.selectField}
+                                    >
+                                      <option value="">-- Nicht verknüpft (Leerwert) --</option>
+                                      {req.type === "database" ? (
+                                        <optgroup label="Datenbanken (Postgres & MongoDB)">
+                                          {registeredDbs
+                                            .filter(db => !req.dbType || db.type === req.dbType)
+                                            .map(db => (
+                                              <option key={db.id} value={db.id}>
+                                                {db.alias} ({db.type})
+                                              </option>
+                                            ))
+                                          }
+                                        </optgroup>
+                                      ) : (
+                                        <>
+                                          {req.key.toUpperCase().includes("PORT") ? (
+                                            <optgroup label="System Ports">
+                                              {registeredCreds
+                                                .filter(cred => cred.type === "port" || cred.key === "PORT" || cred.key.includes("PORT"))
+                                                .map(cred => (
+                                                  <option key={cred.id} value={cred.id}>
+                                                    {cred.alias} ({cred.value})
+                                                  </option>
+                                                ))
+                                              }
+                                            </optgroup>
+                                          ) : (
+                                            <optgroup label="Google API & AI Keys">
+                                              {registeredCreds
+                                                .filter(cred => !(cred.type === "port" || cred.key === "PORT" || cred.key.includes("PORT")))
+                                                .map(cred => (
+                                                  <option key={cred.id} value={cred.id}>
+                                                    {cred.alias} ({cred.key})
+                                                  </option>
+                                                ))
+                                              }
+                                            </optgroup>
+                                          )}
+                                        </>
+                                      )}
+                                    </select>
+                                  )}
+
+                                  {req.type === "database" && currentVal && (
+                                    (() => {
+                                      const selectedDb = registeredDbs.find(d => d.id === currentVal);
+                                      if (!selectedDb) return null;
+                                      
+                                      const selectedAppUserId = (pendingLinks[proj.name] || {})[`${req.key}_USER`] || "";
+
+                                      return (
+                                        <div style={{ background: "rgba(255,255,255,0.02)", padding: "0.5rem", borderRadius: "6px", border: "1px solid var(--border-glass)" }}>
+                                          <div className="input-group" style={{ marginBottom: 0 }}>
+                                            <label className="input-label" style={{ fontSize: "0.7rem", color: "var(--text-secondary)", marginBottom: "0.15rem" }}>App-User (.env)</label>
+                                            <select
+                                              value={selectedAppUserId}
+                                              onChange={e => handleLinkChange(proj.name, undefined, `${req.key}_USER`, e.target.value)}
+                                              className={styles.selectField}
+                                              style={{ fontSize: "0.75rem", padding: "0.25rem", height: "auto" }}
+                                            >
+                                              <option value="">Standard</option>
+                                              {selectedDb.users?.map(u => (
+                                                <option key={u.id} value={u.id}>
+                                                  {u.username} ({u.alias || "User"})
+                                                </option>
+                                              ))}
+                                            </select>
+                                          </div>
+                                        </div>
+                                      );
+                                    })()
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  )}
 
                   {proj.hasPrisma && (
                     <div style={{ borderTop: "1px solid var(--border-glass)", marginTop: "1.5rem", paddingTop: "1.5rem" }}>
@@ -5816,6 +6189,135 @@ export default function DashboardPage() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal for Direct .env Editing and Management */}
+      {envEditorState.isOpen && (
+        <div className={styles.modalOverlay} onClick={closeEnvEditor}>
+          <div className={`${styles.modalCard} ${styles.envModalCard}`} onClick={(e) => e.stopPropagation()}>
+            <div className={styles.modalHeader}>
+              <div className={styles.modalTitle}>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                  <polyline points="14 2 14 8 20 8"></polyline>
+                  <line x1="16" y1="13" x2="8" y2="13"></line>
+                  <line x1="16" y1="17" x2="8" y2="17"></line>
+                  <polyline points="10 9 9 9 8 9"></polyline>
+                </svg>
+                <span>
+                  .env Editor: <code style={{ color: "var(--primary)" }}>{envEditorState.projectName}</code>
+                  {envEditorState.serviceName && <span style={{ color: "var(--text-secondary)", fontSize: "0.85rem", fontWeight: 400 }}> &bull; {envEditorState.serviceName}</span>}
+                </span>
+              </div>
+              <button type="button" className={styles.modalCloseBtn} onClick={closeEnvEditor} title="Schließen">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <line x1="18" y1="6" x2="6" y2="18"></line>
+                  <line x1="6" y1="6" x2="18" y2="18"></line>
+                </svg>
+              </button>
+            </div>
+
+            <div style={{ padding: "0 1.5rem 0.5rem 1.5rem", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "0.5rem" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.78rem", color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
+                <span>Dateipfad:</span>
+                <span style={{ color: "#93c5fd", background: "rgba(59, 130, 246, 0.1)", padding: "0.15rem 0.45rem", borderRadius: "4px" }}>
+                  {envEditorState.envPath || envEditorState.envRelPath || ".env"}
+                </span>
+                {envEditorState.pm2Process && (
+                  <span style={{ color: "var(--text-secondary)" }}>
+                    (PM2: {envEditorState.pm2Process})
+                  </span>
+                )}
+              </div>
+
+              {envEditorState.content !== envEditorState.initialContent && (
+                <span style={{ fontSize: "0.75rem", color: "#fbbf24", background: "rgba(245, 158, 11, 0.1)", padding: "0.15rem 0.5rem", borderRadius: "12px", border: "1px solid rgba(245, 158, 11, 0.25)" }}>
+                  ● Ungespeicherte Änderungen
+                </span>
+              )}
+            </div>
+
+            {envEditorState.error && (
+              <div style={{ margin: "0 1.5rem 0.75rem 1.5rem", padding: "0.6rem 0.85rem", background: "rgba(239, 68, 68, 0.1)", border: "1px solid var(--danger)", borderRadius: "var(--radius-md)", color: "#fca5a5", fontSize: "0.85rem" }}>
+                {envEditorState.error}
+              </div>
+            )}
+
+            {envEditorState.successMessage && (
+              <div style={{ margin: "0 1.5rem 0.75rem 1.5rem", padding: "0.6rem 0.85rem", background: "rgba(16, 185, 129, 0.1)", border: "1px solid rgba(16, 185, 129, 0.3)", borderRadius: "var(--radius-md)", color: "#34d399", fontSize: "0.85rem" }}>
+                {envEditorState.successMessage}
+              </div>
+            )}
+
+            <div className={styles.modalBody} style={{ flex: 1, display: "flex", flexDirection: "column", padding: "0.5rem 1.5rem" }}>
+              {envEditorState.isLoading ? (
+                <div style={{ textAlign: "center", padding: "4rem" }}>
+                  <svg className="spinner" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" strokeWidth="2.5"><circle cx="12" cy="12" r="10" strokeDasharray="30 15"></circle></svg>
+                  <p style={{ marginTop: "1rem", color: "var(--text-muted)", fontSize: "0.85rem" }}>Lade .env Datei...</p>
+                </div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem", flex: 1 }}>
+                  <textarea
+                    value={envEditorState.content}
+                    onChange={(e) => setEnvEditorState(prev => ({ ...prev, content: e.target.value }))}
+                    placeholder="PORT=3000&#10;DATABASE_URL=...&#10;DISCORD_TOKEN=..."
+                    className={styles.envTextarea}
+                    spellCheck={false}
+                    disabled={envEditorState.isSaving}
+                  />
+                  <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
+                    💡 Änderungen werden direkt in die Zieldatei auf dem Server geschrieben. Mit &quot;Speichern & PM2 Neustarten&quot; übernimmt der Dienst die neuen Werte sofort.
+                  </span>
+                </div>
+              )}
+            </div>
+
+            <div className={styles.modalFooter} style={{ padding: "1rem 1.5rem" }}>
+              <button
+                type="button"
+                onClick={closeEnvEditor}
+                className="btn btn-secondary"
+                disabled={envEditorState.isSaving}
+              >
+                Schließen
+              </button>
+
+              <div style={{ display: "flex", gap: "0.5rem" }}>
+                <button
+                  type="button"
+                  onClick={() => handleSaveEnvFile(false)}
+                  disabled={envEditorState.isSaving || envEditorState.isLoading}
+                  className="btn btn-secondary"
+                  title="Nur Datei speichern ohne den PM2-Prozess neu zu starten"
+                >
+                  {envEditorState.isSaving ? "Speichert..." : "Nur Speichern"}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleSaveEnvFile(true)}
+                  disabled={envEditorState.isSaving || envEditorState.isLoading}
+                  className="btn btn-primary"
+                  title="Datei speichern und PM2-Prozess sofort neu starten"
+                >
+                  {envEditorState.isSaving ? (
+                    <>
+                      <svg className="spinner" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10" strokeDasharray="30 15"></circle></svg>
+                      <span>Speichern & Neustart...</span>
+                    </>
+                  ) : (
+                    <>
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"></path>
+                      </svg>
+                      <span>Speichern & PM2 Neustarten</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

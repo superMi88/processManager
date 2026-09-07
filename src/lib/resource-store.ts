@@ -31,7 +31,9 @@ export interface CredentialConfig {
 
 export interface ProjectRequirement {
   key: string;
-  type: "database" | "credential" | "textinput" | "text";
+  type: "database" | "credential" | "textinput" | "text" | "port" | "domain" | "secret";
+  label?: string;
+  defaultValue?: string;
   dbType?: "postgres" | "mongodb";
   description?: string;
 }
@@ -298,6 +300,135 @@ export function generateEnvContent(
   return envLines.join("\n");
 }
 
+// Helper to restart a service PM2 process
+export async function restartServiceProcess(projectName: string, service: ProjectServiceDeclaration): Promise<boolean> {
+  let restarted = false;
+  try {
+    if (service.pm2Process) {
+      restarted = await restartProcess(service.pm2Process);
+    }
+    if (!restarted) {
+      const kebabCase = projectName.replace(/([a-z0-9])([A-Z])/g, "$1-$2").toLowerCase();
+      const pm2Names = [
+        service.name,
+        service.name.toLowerCase(),
+        projectName,
+        projectName.toLowerCase(),
+        `${projectName}-server`,
+        kebabCase,
+        `${kebabCase}-server`
+      ];
+      for (const name of pm2Names) {
+        const success = await restartProcess(name);
+        if (success) {
+          restarted = true;
+          break;
+        }
+      }
+    }
+  } catch (err) {
+    console.error(`Failed to restart PM2 for service '${service.name}' of '${projectName}':`, err);
+  }
+  return restarted;
+}
+
+// Read or preview the .env file for a service
+export function getProjectEnvFile(projectName: string, serviceName?: string): {
+  success: boolean;
+  content?: string;
+  envPath?: string;
+  envRelPath?: string;
+  exists?: boolean;
+  serviceName?: string;
+  error?: string;
+} {
+  try {
+    const store = readStore();
+    const discovered = getDiscoveredProjects();
+    const projInfo = discovered.find(p => p.declaration.name === projectName);
+    if (!projInfo) {
+      return { success: false, error: `Project '${projectName}' not found.` };
+    }
+
+    const service = serviceName 
+      ? projInfo.declaration.services.find(s => s.name === serviceName) || projInfo.declaration.services[0]
+      : projInfo.declaration.services[0];
+
+    if (!service) {
+      return { success: false, error: `No service found in project '${projectName}'.` };
+    }
+
+    const envRelPath = service.envPath || ".env";
+    const envPath = path.isAbsolute(envRelPath) ? envRelPath : path.join(projInfo.projectPath, envRelPath);
+    const exists = fs.existsSync(envPath);
+
+    let content = "";
+    if (exists) {
+      content = fs.readFileSync(envPath, "utf-8");
+    } else {
+      const serviceLinkKey = store.links[`${projectName}/${service.name}`] 
+        ? `${projectName}/${service.name}` 
+        : (store.links[service.name] ? service.name : projectName);
+      content = generateEnvContent(serviceLinkKey, service, store);
+    }
+
+    return {
+      success: true,
+      content,
+      envPath,
+      envRelPath,
+      exists,
+      serviceName: service.name
+    };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+// Write the .env file directly and optionally restart PM2
+export async function saveProjectEnvFile(
+  projectName: string,
+  serviceName: string | undefined,
+  content: string,
+  restartPm2: boolean
+): Promise<{ success: boolean; error?: string; restarted?: boolean }> {
+  try {
+    const discovered = getDiscoveredProjects();
+    const projInfo = discovered.find(p => p.declaration.name === projectName);
+    if (!projInfo) {
+      return { success: false, error: `Project '${projectName}' not found.` };
+    }
+
+    const service = serviceName 
+      ? projInfo.declaration.services.find(s => s.name === serviceName) || projInfo.declaration.services[0]
+      : projInfo.declaration.services[0];
+
+    if (!service) {
+      return { success: false, error: `No service found in project '${projectName}'.` };
+    }
+
+    const envRelPath = service.envPath || ".env";
+    const envPath = path.isAbsolute(envRelPath) ? envRelPath : path.join(projInfo.projectPath, envRelPath);
+    const envDir = path.dirname(envPath);
+
+    if (!fs.existsSync(envDir)) {
+      fs.mkdirSync(envDir, { recursive: true });
+    }
+
+    fs.writeFileSync(envPath, content, "utf-8");
+    console.log(`Saved .env for '${service.name}' of ${projectName} at ${envPath}`);
+
+    let restarted = false;
+    if (restartPm2) {
+      restarted = await restartServiceProcess(projectName, service);
+    }
+
+    return { success: true, restarted };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
 // Apply project environment and optionally restart via PM2
 export async function applyProjectEnvironment(projectName: string, serviceName?: string): Promise<{ success: boolean; error?: string }> {
   try {
@@ -314,7 +445,7 @@ export async function applyProjectEnvironment(projectName: string, serviceName?:
       : projInfo.declaration.services;
 
     for (const service of servicesToApply) {
-      // Determine link key: if service name equals project name or there's only 1 service, check projectName first.
+      // Determine link key: check `${projectName}/${service.name}` first, then `${service.name}`, then `${projectName}`
       const serviceLinkKey = store.links[`${projectName}/${service.name}`] 
         ? `${projectName}/${service.name}` 
         : (store.links[service.name] ? service.name : projectName);
@@ -333,33 +464,7 @@ export async function applyProjectEnvironment(projectName: string, serviceName?:
 
       // Restart PM2 process
       setTimeout(async () => {
-        try {
-          let restarted = false;
-          if (service.pm2Process) {
-            restarted = await restartProcess(service.pm2Process);
-          }
-          if (!restarted) {
-            const kebabCase = projectName.replace(/([a-z0-9])([A-Z])/g, "$1-$2").toLowerCase();
-            const pm2Names = [
-              service.name,
-              service.name.toLowerCase(),
-              projectName,
-              projectName.toLowerCase(),
-              `${projectName}-server`,
-              kebabCase,
-              `${kebabCase}-server`
-            ];
-            for (const name of pm2Names) {
-              const success = await restartProcess(name);
-              if (success) {
-                restarted = true;
-                break;
-              }
-            }
-          }
-        } catch (pm2Error) {
-          console.error(`Failed to restart PM2 process for service '${service.name}' of project '${projectName}':`, pm2Error);
-        }
+        await restartServiceProcess(projectName, service);
       }, 50);
     }
     
