@@ -38,12 +38,23 @@ export interface ProjectRequirement {
   description?: string;
 }
 
+export interface ServiceDependency {
+  project?: string;
+  service?: string;
+  process?: string;
+  plugin?: string;
+  required?: boolean;
+  description?: string;
+}
+
 export interface ProjectServiceDeclaration {
   name: string;
   envPath?: string; // e.g. ".env" or "./bot/.env"
   pm2Process?: string; // e.g. "kisystem", "discord-bot"
   domain?: string;
+  dependsOn?: string | (string | ServiceDependency)[];
   requirements: ProjectRequirement[];
+  links?: Record<string, string>;
 }
 
 export interface ProjectDeclaration {
@@ -52,6 +63,7 @@ export interface ProjectDeclaration {
   services: ProjectServiceDeclaration[];
   requirements?: ProjectRequirement[];
   pm2Process?: string;
+  dependsOn?: string | (string | ServiceDependency)[];
 }
 
 export interface DomainConfig {
@@ -67,6 +79,7 @@ export interface ProcessLinkConfig {
   dbId?: string;
   port?: string;
   domain?: string;
+  dependsOn?: string;
 }
 
 export interface ResourceStore {
@@ -74,7 +87,7 @@ export interface ResourceStore {
   credentials: CredentialConfig[];
   links: Record<string, Record<string, string>>; // projectName -> envKey -> resourceId
   domains?: DomainConfig[];
-  processLinks?: Record<string, ProcessLinkConfig>; // processName -> { dbId, port, domain }
+  processLinks?: Record<string, ProcessLinkConfig>; // processName -> { dbId, port, domain, dependsOn }
 }
 
 const STORE_PATH = path.resolve(process.cwd(), "src/data/resources.json");
@@ -91,10 +104,11 @@ export function readStore(): ResourceStore {
         let migrated = false;
         store.databases = store.databases.map((db: DatabaseConfig & { user?: string; password?: string }) => {
           if (!db.users || !Array.isArray(db.users)) {
+            const defaultUsername = db.type === "mongodb" ? "" : (db.user || "postgres");
             db.users = [
               {
                 id: "u-default",
-                username: db.user || "postgres",
+                username: defaultUsername,
                 password: db.password || "",
                 alias: "Standard-Benutzer"
               }
@@ -110,6 +124,16 @@ export function readStore(): ResourceStore {
             db.superuser = db.users[migUserIdx];
             db.users = db.users.filter(u => u.id !== "u-migration");
             migrated = true;
+          }
+
+          // For mongodb, sanitize legacy "postgres" username
+          if (db.type === "mongodb" && db.users) {
+            db.users.forEach(u => {
+              if (u.username === "postgres" && (!u.password || u.password === "")) {
+                u.username = "";
+                migrated = true;
+              }
+            });
           }
           
           return db;
@@ -129,7 +153,13 @@ export function readStore(): ResourceStore {
   } catch (error) {
     console.error("Failed to read resources store:", error);
   }
-  return { databases: [], credentials: [], links: {}, domains: [], processLinks: {} };
+  return {
+    databases: [],
+    credentials: [],
+    links: {},
+    domains: [],
+    processLinks: {}
+  };
 }
 
 // Helper to save store
@@ -182,6 +212,7 @@ export function getDiscoveredProjects(): {
                       name: declaration.name,
                       envPath: ".env",
                       pm2Process: declaration.pm2Process || declaration.name,
+                      dependsOn: declaration.dependsOn,
                       requirements: declaration.requirements || []
                     }
                   ];
@@ -191,6 +222,7 @@ export function getDiscoveredProjects(): {
                     envPath: s.envPath || ".env",
                     pm2Process: s.pm2Process,
                     domain: s.domain,
+                    dependsOn: s.dependsOn || declaration.dependsOn,
                     requirements: Array.isArray(s.requirements) ? s.requirements : []
                   }));
                 }
@@ -240,21 +272,117 @@ export function getDiscoveredProjects(): {
 // Build connection URL for database
 export function buildDatabaseUrl(db: DatabaseConfig, userObj?: DatabaseUser): string {
   const user = userObj || db.users?.[0];
-  const userPass = user ? `${user.username}:${user.password || ""}@` : "";
+  const hasUser = Boolean(user && user.username && user.username.trim() !== "");
+
   if (db.type === "postgres") {
+    const userPass = hasUser ? `${user!.username}:${user!.password || ""}@` : "";
     const schema = db.schema ? `?schema=${db.schema}` : "";
     return `postgresql://${userPass}${db.host}:${db.port}/${db.database}${schema}`;
   } else if (db.type === "mongodb") {
-    // MongoDB doesn't enforce schema, check if srv or standard
+    // Only include user:pass@ if a valid, non-placeholder username exists
+    const isAuth = hasUser && user!.username !== "postgres";
+    const userPass = isAuth ? `${user!.username}:${user!.password || ""}@` : "";
     return `mongodb://${userPass}${db.host}:${db.port}/${db.database}`;
   }
   return "";
 }
 
+// Helper to resolve parent dependency for a service or process
+export function resolveServiceDependency(
+  service: { name?: string; pm2Process?: string; dependsOn?: string | (string | ServiceDependency)[] },
+  store: ResourceStore,
+  allDiscovered?: { declaration: ProjectDeclaration }[]
+): {
+  targetName: string;
+  dbId?: string;
+  port?: string;
+  domain?: string;
+  isOptional?: boolean;
+  plugin?: string;
+} | null {
+  const procName = service.pm2Process || service.name || "";
+  let depRaw = service.dependsOn || store.processLinks?.[procName]?.dependsOn;
+
+  if (!depRaw) return null;
+
+  let targetStr = "";
+  let isOptional = false;
+  let plugin: string | undefined = undefined;
+
+  if (typeof depRaw === "string") {
+    targetStr = depRaw;
+  } else if (Array.isArray(depRaw) && depRaw.length > 0) {
+    const first = depRaw[0];
+    if (typeof first === "string") {
+      targetStr = first;
+    } else if (first && typeof first === "object") {
+      targetStr = first.process || first.service || first.project || "";
+      isOptional = first.required === false;
+      plugin = first.plugin;
+    }
+  }
+
+  if (!targetStr) return null;
+
+  const parts = targetStr.split("/");
+  const targetProjectOrService = parts[parts.length - 1].trim();
+
+  let foundDbId: string | undefined = undefined;
+  let foundPort: string | undefined = undefined;
+  let foundDomain: string | undefined = undefined;
+
+  // 1. Check processLinks
+  for (const [pName, link] of Object.entries(store.processLinks || {})) {
+    if (pName.toLowerCase() === targetProjectOrService.toLowerCase() ||
+        pName.toLowerCase().replace(/[-_]/g, "") === targetProjectOrService.toLowerCase().replace(/[-_]/g, "")) {
+      if (link.dbId) foundDbId = link.dbId;
+      if (link.port) foundPort = link.port;
+      if (link.domain) foundDomain = link.domain;
+      break;
+    }
+  }
+
+  // 2. Check store.links
+  if (!foundDbId) {
+    for (const [linkKey, links] of Object.entries(store.links || {})) {
+      if (linkKey.toLowerCase().includes(targetProjectOrService.toLowerCase()) ||
+          targetProjectOrService.toLowerCase().includes(linkKey.toLowerCase())) {
+        if (links["DATABASE_URL"]) {
+          foundDbId = links["DATABASE_URL"];
+          break;
+        }
+      }
+    }
+  }
+
+  // 3. Check discovered projects
+  if (!foundDbId && allDiscovered) {
+    for (const p of allDiscovered) {
+      if (p.declaration.name.toLowerCase() === targetProjectOrService.toLowerCase() ||
+          p.declaration.services.some(s => s.name.toLowerCase() === targetProjectOrService.toLowerCase() || s.pm2Process?.toLowerCase() === targetProjectOrService.toLowerCase())) {
+        const sLink = store.links[p.declaration.name];
+        if (sLink && sLink["DATABASE_URL"]) {
+          foundDbId = sLink["DATABASE_URL"];
+          break;
+        }
+      }
+    }
+  }
+
+  return {
+    targetName: targetProjectOrService,
+    dbId: foundDbId,
+    port: foundPort,
+    domain: foundDomain,
+    isOptional,
+    plugin
+  };
+}
+
 // Generate env variables content for a project or service
 export function generateEnvContent(
   targetKey: string, 
-  serviceOrDeclaration: { requirements?: ProjectRequirement[]; name?: string }, 
+  serviceOrDeclaration: { requirements?: ProjectRequirement[]; name?: string; pm2Process?: string; domain?: string; dependsOn?: string | (string | ServiceDependency)[] }, 
   store: ResourceStore
 ): string {
   const projectLinks = store.links[targetKey] || {};
@@ -268,32 +396,78 @@ export function generateEnvContent(
     ""
   ].filter(Boolean);
 
+  // Check if service inherits DB from parent dependency
+  const depInfo = resolveServiceDependency(serviceOrDeclaration, store);
+  let inheritedDb: DatabaseConfig | undefined = undefined;
+  if (depInfo?.dbId) {
+    inheritedDb = store.databases.find(d => d.id === depInfo.dbId);
+  }
+
+  let dbHandled = false;
+
   for (const req of reqs) {
-    const resourceId = projectLinks[req.key];
+    let resourceId = projectLinks[req.key];
     let value = "";
     
-    if (resourceId) {
-      if (req.type === "database") {
-        const db = store.databases.find(d => d.id === resourceId);
-        if (db) {
-          const selectedUserId = projectLinks[`${req.key}_USER`];
-          const userObj = db.users?.find(u => u.id === selectedUserId) || db.users?.[0];
-          value = buildDatabaseUrl(db, userObj);
+    if (req.type === "database" || req.key === "DATABASE_URL") {
+      dbHandled = true;
+      const targetDb = (inheritedDb && (!resourceId || resourceId === inheritedDb.id)) 
+        ? inheritedDb 
+        : (resourceId ? store.databases.find(d => d.id === resourceId) : inheritedDb);
+
+      if (targetDb) {
+        const selectedUserId = projectLinks[`${req.key}_USER`];
+        const userObj = targetDb.users?.find(u => u.id === selectedUserId) || targetDb.users?.[0];
+        value = buildDatabaseUrl(targetDb, userObj);
+      }
+    } else if (req.type === "domain" || ["NEXTAUTH_URL", "APP_URL", "PUBLIC_URL", "DOMAIN", "REDIRECT_URI"].includes(req.key.toUpperCase())) {
+      if (resourceId) {
+        value = resourceId;
+      } else {
+        const procName = serviceOrDeclaration.pm2Process || serviceOrDeclaration.name || "";
+        const procLink = store.processLinks?.[procName];
+        const domainStr = procLink?.domain || serviceOrDeclaration.domain;
+        
+        let foundDomain = store.domains?.find(d => d.domain.toLowerCase() === (domainStr || "").toLowerCase());
+        if (!foundDomain && domainStr) {
+          foundDomain = { id: "d-temp", domain: domainStr, targetType: "project", targetValue: procName, sslEnabled: domainStr.startsWith("https://") || true, createdAt: "" };
         }
-      } else if (req.type === "textinput" || req.type === "text") {
+
+        if (foundDomain) {
+          const ssl = foundDomain.sslEnabled ?? false;
+          value = `http${ssl ? "s" : ""}://${foundDomain.domain}`;
+        } else {
+          const portVal = procLink?.port || projectLinks["PORT"] || reqs.find(r => r.type === "port" || r.key === "PORT")?.defaultValue || req.defaultValue || "3000";
+          value = `http://localhost:${portVal}`;
+        }
+      }
+    } else if (resourceId) {
+      if (req.type === "textinput" || req.type === "text") {
         value = resourceId;
       } else {
         const cred = store.credentials.find(c => c.id === resourceId);
         if (cred) {
           value = cred.value;
+        } else {
+          value = resourceId;
         }
       }
+    } else if (req.defaultValue) {
+      value = req.defaultValue;
     }
     
     envLines.push(`# ${req.description || req.key}`);
-    // If value contains spaces, wrap in quotes
     const formattedValue = value.includes(" ") ? `"${value}"` : value;
     envLines.push(`${req.key}=${formattedValue}`);
+    envLines.push("");
+  }
+
+  // Auto-inject inherited DATABASE_URL if service didn't declare it explicitly
+  if (!dbHandled && inheritedDb) {
+    const userObj = inheritedDb.users?.[0];
+    const inheritedUrl = buildDatabaseUrl(inheritedDb, userObj);
+    envLines.push(`# Automatisch geerbt von ${depInfo?.targetName || "Abhängigkeit"}`);
+    envLines.push(`DATABASE_URL=${inheritedUrl}`);
     envLines.push("");
   }
   
@@ -466,6 +640,34 @@ export async function applyProjectEnvironment(projectName: string, serviceName?:
       setTimeout(async () => {
         await restartServiceProcess(projectName, service);
       }, 50);
+    }
+
+    // Cascade .env update to dependent projects that inherit from this project/service
+    for (const otherProj of discovered) {
+      if (otherProj.declaration.name === projectName) continue;
+      for (const otherService of otherProj.declaration.services) {
+        const dep = resolveServiceDependency(otherService, store, discovered);
+        if (dep && (
+          dep.targetName.toLowerCase() === projectName.toLowerCase() ||
+          servicesToApply.some(s => s.name.toLowerCase() === dep.targetName.toLowerCase() || s.pm2Process?.toLowerCase() === dep.targetName.toLowerCase())
+        )) {
+          console.log(`Cascading environment update to dependent service '${otherService.name}' of project '${otherProj.declaration.name}'...`);
+          const otherKey = store.links[`${otherProj.declaration.name}/${otherService.name}`] 
+            ? `${otherProj.declaration.name}/${otherService.name}` 
+            : (store.links[otherService.name] ? otherService.name : otherProj.declaration.name);
+          const childEnv = generateEnvContent(otherKey, otherService, store);
+          const childRel = otherService.envPath || ".env";
+          const childPath = path.isAbsolute(childRel) ? childRel : path.join(otherProj.projectPath, childRel);
+          const childDir = path.dirname(childPath);
+          if (!fs.existsSync(childDir)) {
+            fs.mkdirSync(childDir, { recursive: true });
+          }
+          fs.writeFileSync(childPath, childEnv, "utf-8");
+          setTimeout(async () => {
+            await restartServiceProcess(otherProj.declaration.name, otherService);
+          }, 150);
+        }
+      }
     }
     
     return { success: true };

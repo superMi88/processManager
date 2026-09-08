@@ -654,6 +654,95 @@
   font-weight: 600;
 }
 
+.resourceBoxCombined {
+  background: rgba(16, 185, 129, 0.08);
+  border-color: rgba(16, 185, 129, 0.3);
+  color: #6ee7b7;
+  cursor: pointer;
+}
+
+.resourceBoxCombined:hover {
+  background: rgba(16, 185, 129, 0.16);
+  border-color: rgba(16, 185, 129, 0.55);
+  box-shadow: 0 0 14px rgba(16, 185, 129, 0.25);
+  color: #a7f3d0;
+}
+
+.resourceBoxDomainPart {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: #a7f3d0;
+  opacity: 0.9;
+}
+
+.resourceBoxInherited {
+  background: rgba(99, 102, 241, 0.07);
+  border-color: rgba(99, 102, 241, 0.35);
+  color: #c7d2fe;
+}
+
+.resourceBoxInherited:hover {
+  background: rgba(99, 102, 241, 0.14);
+  border-color: rgba(99, 102, 241, 0.5);
+  box-shadow: 0 0 12px rgba(99, 102, 241, 0.2);
+}
+
+.inheritedLabel {
+  font-size: 0.7rem;
+  color: #a5b4fc;
+  opacity: 0.9;
+  margin-left: 0.15rem;
+  font-weight: 500;
+}
+
+.dependencyBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.28rem 0.6rem;
+  border-radius: var(--radius-md);
+  font-size: 0.76rem;
+  font-weight: 500;
+  text-decoration: none;
+  transition: var(--transition-fast);
+  white-space: nowrap;
+}
+
+.dependencyBadgeOnline {
+  background: rgba(99, 102, 241, 0.08);
+  border: 1px solid rgba(99, 102, 241, 0.3);
+  color: #c7d2fe;
+  cursor: pointer;
+}
+
+.dependencyBadgeOnline:hover {
+  background: rgba(99, 102, 241, 0.16);
+  border-color: rgba(99, 102, 241, 0.5);
+}
+
+.dependencyBadgeOffline {
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  color: #fca5a5;
+  animation: pulseDanger 2s infinite ease-in-out;
+}
+
+.dependencyBadgeAction {
+  background: rgba(239, 68, 68, 0.25);
+  border: 1px solid rgba(239, 68, 68, 0.5);
+  color: #fff;
+  border-radius: var(--radius-sm);
+  padding: 0.1rem 0.4rem;
+  font-size: 0.7rem;
+  margin-left: 0.3rem;
+  cursor: pointer;
+  transition: var(--transition-fast);
+}
+
+.dependencyBadgeAction:hover {
+  background: var(--danger);
+}
+
 .resourceBoxEditBtn {
   display: inline-flex;
   align-items: center;

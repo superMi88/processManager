@@ -147,11 +147,12 @@ export default function DashboardPage() {
   const [domainError, setDomainError] = useState<string | null>(null);
 
   // Process-to-Resource Links states
-  const [processLinks, setProcessLinks] = useState<Record<string, { dbId?: string; port?: string; domain?: string }>>({});
+  const [processLinks, setProcessLinks] = useState<Record<string, { dbId?: string; port?: string; domain?: string; dependsOn?: string }>>({});
   const [editingProcessName, setEditingProcessName] = useState<string | null>(null);
   const [targetDbId, setTargetDbId] = useState<string>("");
   const [targetPort, setTargetPort] = useState<string>("");
   const [targetDomain, setTargetDomain] = useState<string>("");
+  const [targetDependsOn, setTargetDependsOn] = useState<string>("");
   const [isSavingProcessLink, setIsSavingProcessLink] = useState(false);
   const [processLinkError, setProcessLinkError] = useState<string | null>(null);
   const [dashboardViewMode, setDashboardViewMode] = useState<"cockpit" | "table">("cockpit");
@@ -972,6 +973,66 @@ export default function DashboardPage() {
       }
     }
 
+    // Resolve Dependency & Inherited DB
+    const explicitDependsOn = explicit?.dependsOn;
+    const serviceDependsOn = (matchedService as any)?.dependsOn;
+    const projectDependsOn = (matchedProj as any)?.dependsOn;
+    const effectiveDependsOnRaw = explicitDependsOn || serviceDependsOn || projectDependsOn;
+
+    let resolvedDependsOn: string | null = null;
+    let isDepOptional = false;
+    let depPlugin: string | undefined = undefined;
+
+    if (effectiveDependsOnRaw) {
+      if (typeof effectiveDependsOnRaw === "string") {
+        resolvedDependsOn = effectiveDependsOnRaw;
+      } else if (Array.isArray(effectiveDependsOnRaw) && effectiveDependsOnRaw.length > 0) {
+        const first = effectiveDependsOnRaw[0];
+        if (typeof first === "string") {
+          resolvedDependsOn = first;
+        } else if (first && typeof first === "object") {
+          resolvedDependsOn = first.process || first.service || first.project || null;
+          isDepOptional = first.required === false;
+          depPlugin = first.plugin;
+        }
+      }
+    }
+
+    let inheritedFrom: string | null = null;
+    if (resolvedDependsOn) {
+      const pTarget = resolvedDependsOn.split("/").pop()!.trim();
+      let parentDbId: string | undefined = undefined;
+
+      for (const [pName, link] of Object.entries(processLinks || {})) {
+        if (pName.toLowerCase() === pTarget.toLowerCase() || pName.toLowerCase().replace(/[-_]/g, "") === pTarget.toLowerCase().replace(/[-_]/g, "")) {
+          if (link.dbId) {
+            parentDbId = link.dbId;
+            break;
+          }
+        }
+      }
+
+      if (!parentDbId) {
+        for (const p of discoveredProjects) {
+          if (p.name.toLowerCase() === pTarget.toLowerCase() || p.services?.some(s => s.name.toLowerCase() === pTarget.toLowerCase() || s.pm2Process?.toLowerCase() === pTarget.toLowerCase())) {
+            const pLink = p.links?.["DATABASE_URL"] || p.services?.find(s => s.links?.["DATABASE_URL"])?.links?.["DATABASE_URL"];
+            if (pLink) {
+              parentDbId = pLink;
+              break;
+            }
+          }
+        }
+      }
+
+      if (parentDbId) {
+        const reg = registeredDbs.find(d => d.id === parentDbId);
+        if (reg) {
+          resolvedDb = { id: reg.id, alias: reg.alias, type: reg.type, host: reg.host, port: reg.port, database: reg.database };
+          inheritedFrom = pTarget;
+        }
+      }
+    }
+
     // Resolve Port
     if (!port && matchedProj) {
       for (const req of effectiveRequirements) {
@@ -1051,7 +1112,11 @@ export default function DashboardPage() {
       db: resolvedDb,
       port: port || null,
       domain: resolvedDomain,
-      hasCustomLinks: Boolean(explicit && (explicit.dbId || explicit.port || explicit.domain))
+      dependsOn: resolvedDependsOn,
+      inheritedFrom,
+      isDepOptional,
+      depPlugin,
+      hasCustomLinks: Boolean(explicit && (explicit.dbId || explicit.port || explicit.domain || explicit.dependsOn))
     };
   }, [processLinks, discoveredProjects, registeredDbs, registeredCreds, scannedPorts, registeredDomains, databases]);
 
@@ -1059,9 +1124,10 @@ export default function DashboardPage() {
     const res = getProcessResources(procName);
     const existing = processLinks[procName];
     setEditingProcessName(procName);
-    setTargetDbId(existing?.dbId || res.db?.id || "");
+    setTargetDbId(existing?.dbId || (res.inheritedFrom ? "" : res.db?.id) || "");
     setTargetPort(existing?.port || res.port || "");
     setTargetDomain(existing?.domain || res.domain?.domain || "");
+    setTargetDependsOn(existing?.dependsOn || res.dependsOn || "");
     setProcessLinkError(null);
   };
 
@@ -1070,6 +1136,7 @@ export default function DashboardPage() {
     setTargetDbId("");
     setTargetPort("");
     setTargetDomain("");
+    setTargetDependsOn("");
     setProcessLinkError(null);
   };
 
@@ -1089,6 +1156,7 @@ export default function DashboardPage() {
           dbId: targetDbId || undefined,
           port: targetPort || undefined,
           domain: targetDomain || undefined,
+          dependsOn: targetDependsOn || undefined,
         })
       });
 
@@ -1103,13 +1171,14 @@ export default function DashboardPage() {
       } else {
         setProcessLinks(prev => {
           const next = { ...prev };
-          if (!targetDbId && !targetPort && !targetDomain) {
+          if (!targetDbId && !targetPort && !targetDomain && !targetDependsOn) {
             delete next[editingProcessName];
           } else {
             next[editingProcessName] = {
               dbId: targetDbId || undefined,
               port: targetPort || undefined,
               domain: targetDomain || undefined,
+              dependsOn: targetDependsOn || undefined,
             };
           }
           return next;
@@ -2494,7 +2563,21 @@ export default function DashboardPage() {
                                   <div>
                                     <div className={styles.resourceBoxesWrapper}>
                                       {/* Database */}
-                                      {res.db ? (
+                                      {res.inheritedFrom ? (
+                                        <span
+                                          className={`${styles.resourceBox} ${styles.resourceBoxDb} ${styles.resourceBoxInherited}`}
+                                          onClick={() => setActiveTab("databases")}
+                                          title={`Datenbank: ${res.db?.alias} (Automatisch geerbt von ${res.inheritedFrom})`}
+                                        >
+                                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                            <ellipse cx="12" cy="5" rx="9" ry="3"></ellipse>
+                                            <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path>
+                                            <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path>
+                                          </svg>
+                                          <span className={styles.resourceBoxValue}>{res.db?.alias}</span>
+                                          <span className={styles.inheritedLabel}>↳ {res.inheritedFrom}</span>
+                                        </span>
+                                      ) : res.db ? (
                                         <span
                                           className={`${styles.resourceBox} ${styles.resourceBoxDb}`}
                                           onClick={() => setActiveTab("databases")}
@@ -2519,67 +2602,70 @@ export default function DashboardPage() {
                                         </button>
                                       )}
 
-                                      {/* Port */}
-                                      {res.port ? (
+                                      {/* Combined Port & Domain */}
+                                      {(res.port || res.domain) ? (
                                         <a
-                                          href={`http://localhost:${res.port}`}
+                                          href={res.domain ? `http${res.domain.sslEnabled ? "s" : ""}://${res.domain.domain}` : `http://localhost:${res.port}`}
                                           target="_blank"
                                           rel="noopener noreferrer"
-                                          className={`${styles.resourceBox} ${styles.resourceBoxPort}`}
-                                          title={`Lokaler Port ${res.port} (im Browser öffnen)`}
+                                          className={`${styles.resourceBox} ${styles.resourceBoxCombined}`}
+                                          title={res.domain ? `Lokaler Port ${res.port || "—"} ➔ Domain: ${res.domain.domain} (im Browser öffnen)` : `Lokaler Port ${res.port} (im Browser öffnen)`}
                                         >
                                           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                                             <circle cx="12" cy="12" r="10"></circle>
-                                            <line x1="12" y1="8" x2="12" y2="12"></line>
-                                            <line x1="12" y1="16" x2="12.01" y2="16"></line>
+                                            <line x1="2" y1="12" x2="22" y2="12"></line>
+                                            <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1 4-10z"></path>
                                           </svg>
-                                          <span className={styles.resourceBoxLabel}>Port:</span>
-                                          <span className={styles.resourceBoxValue}>{res.port}</span>
+                                          {res.port && <span className={styles.resourceBoxLabel}>:{res.port}</span>}
+                                          {res.domain && <span className={styles.resourceBoxDomainPart}>({res.domain.domain})</span>}
                                         </a>
                                       ) : (
                                         <button
                                           type="button"
                                           className={`${styles.resourceBox} ${styles.resourceBoxEmpty}`}
                                           onClick={() => openProcessLinkModal(procName)}
-                                          title="Port zuweisen"
+                                          title="Port / Domain zuweisen"
                                         >
-                                          + Port
+                                          + Port / Domain
                                         </button>
                                       )}
 
-                                      {/* Domain */}
-                                      {res.domain ? (
-                                        <a
-                                          href={`http${res.domain.sslEnabled ? "s" : ""}://${res.domain.domain}`}
-                                          target="_blank"
-                                          rel="noopener noreferrer"
-                                          className={`${styles.resourceBox} ${styles.resourceBoxDomain}`}
-                                          title={`Domain: ${res.domain.domain} (im Browser öffnen)`}
-                                        >
-                                          {res.domain.sslEnabled ? (
+                                      {/* Dependency Badge */}
+                                      {res.dependsOn && (() => {
+                                        const targetProc = processes.find(p => 
+                                          p.name.toLowerCase() === res.dependsOn!.toLowerCase() ||
+                                          p.name.toLowerCase().replace(/[-_]/g, "") === res.dependsOn!.toLowerCase().replace(/[-_]/g, "")
+                                        );
+                                        const isTargetOnline = targetProc?.status === "online";
+                                        const targetProcName = targetProc?.name || res.dependsOn;
+
+                                        return (
+                                          <span
+                                            className={`${styles.dependencyBadge} ${isTargetOnline ? styles.dependencyBadgeOnline : styles.dependencyBadgeOffline}`}
+                                            title={isTargetOnline ? `Hängt ab von: ${res.dependsOn} (Online)` : `Achtung: Benötigter Prozess ${res.dependsOn} ist offline!`}
+                                          >
                                             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                              <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
-                                              <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                                              <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+                                              <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
                                             </svg>
-                                          ) : (
-                                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                              <circle cx="12" cy="12" r="10"></circle>
-                                              <line x1="2" y1="12" x2="22" y2="12"></line>
-                                              <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1 4-10z"></path>
-                                            </svg>
-                                          )}
-                                          <span className={styles.resourceBoxValue}>{res.domain.domain}</span>
-                                        </a>
-                                      ) : (
-                                        <button
-                                          type="button"
-                                          className={`${styles.resourceBox} ${styles.resourceBoxEmpty}`}
-                                          onClick={() => openProcessLinkModal(procName)}
-                                          title="Domain zuweisen"
-                                        >
-                                          + Domain
-                                        </button>
-                                      )}
+                                            <span>Benötigt: {res.dependsOn}</span>
+                                            <span style={{ fontSize: "0.68rem" }}>{isTargetOnline ? "●" : "⚠️ Offline"}</span>
+                                            {!isTargetOnline && (
+                                              <button
+                                                type="button"
+                                                className={styles.dependencyBadgeAction}
+                                                onClick={(e) => {
+                                                  e.stopPropagation();
+                                                  handleProcessAction(targetProcName, "start");
+                                                }}
+                                                title={`${targetProcName} starten`}
+                                              >
+                                                ▶ Starten
+                                              </button>
+                                            )}
+                                          </span>
+                                        );
+                                      })()}
 
                                       {/* Edit Modal */}
                                       <button
@@ -2747,7 +2833,21 @@ export default function DashboardPage() {
 
                                 <div>
                                   <div className={styles.resourceBoxesWrapper}>
-                                    {res.db ? (
+                                    {res.inheritedFrom ? (
+                                      <span
+                                        className={`${styles.resourceBox} ${styles.resourceBoxDb} ${styles.resourceBoxInherited}`}
+                                        onClick={() => setActiveTab("databases")}
+                                        title={`Datenbank: ${res.db?.alias} (Automatisch geerbt von ${res.inheritedFrom})`}
+                                      >
+                                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                          <ellipse cx="12" cy="5" rx="9" ry="3"></ellipse>
+                                          <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path>
+                                          <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path>
+                                        </svg>
+                                        <span className={styles.resourceBoxValue}>{res.db?.alias}</span>
+                                        <span className={styles.inheritedLabel}>↳ {res.inheritedFrom}</span>
+                                      </span>
+                                    ) : res.db ? (
                                       <span
                                         className={`${styles.resourceBox} ${styles.resourceBoxDb}`}
                                         onClick={() => setActiveTab("databases")}
@@ -2771,45 +2871,46 @@ export default function DashboardPage() {
                                       </button>
                                     )}
 
-                                    {res.port ? (
+                                    {/* Combined Port & Domain */}
+                                    {(res.port || res.domain) ? (
                                       <a
-                                        href={`http://localhost:${res.port}`}
+                                        href={res.domain ? `http${res.domain.sslEnabled ? "s" : ""}://${res.domain.domain}` : `http://localhost:${res.port}`}
                                         target="_blank"
                                         rel="noopener noreferrer"
-                                        className={`${styles.resourceBox} ${styles.resourceBoxPort}`}
+                                        className={`${styles.resourceBox} ${styles.resourceBoxCombined}`}
+                                        title={res.domain ? `Port ${res.port || "—"} ➔ Domain: ${res.domain.domain}` : `Port ${res.port}`}
                                       >
-                                        <span className={styles.resourceBoxLabel}>Port:</span>
-                                        <span className={styles.resourceBoxValue}>{res.port}</span>
+                                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                          <circle cx="12" cy="12" r="10"></circle>
+                                          <line x1="2" y1="12" x2="22" y2="12"></line>
+                                          <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1 4-10z"></path>
+                                        </svg>
+                                        {res.port && <span className={styles.resourceBoxLabel}>:{res.port}</span>}
+                                        {res.domain && <span className={styles.resourceBoxDomainPart}>({res.domain.domain})</span>}
                                       </a>
                                     ) : (
                                       <button
                                         type="button"
                                         className={`${styles.resourceBox} ${styles.resourceBoxEmpty}`}
                                         onClick={() => openProcessLinkModal(proc.name)}
-                                        title="Port zuweisen"
+                                        title="Port / Domain zuweisen"
                                       >
-                                        + Port
+                                        + Port / Domain
                                       </button>
                                     )}
 
-                                    {res.domain ? (
-                                      <a
-                                        href={`http${res.domain.sslEnabled ? "s" : ""}://${res.domain.domain}`}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        className={`${styles.resourceBox} ${styles.resourceBoxDomain}`}
+                                    {/* Dependency Badge */}
+                                    {res.dependsOn && (
+                                      <span
+                                        className={`${styles.dependencyBadge} ${styles.dependencyBadgeOnline}`}
+                                        title={`Hängt ab von: ${res.dependsOn}`}
                                       >
-                                        <span className={styles.resourceBoxValue}>{res.domain.domain}</span>
-                                      </a>
-                                    ) : (
-                                      <button
-                                        type="button"
-                                        className={`${styles.resourceBox} ${styles.resourceBoxEmpty}`}
-                                        onClick={() => openProcessLinkModal(proc.name)}
-                                        title="Domain zuweisen"
-                                      >
-                                        + Domain
-                                      </button>
+                                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                          <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+                                          <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+                                        </svg>
+                                        <span>Benötigt: {res.dependsOn}</span>
+                                      </span>
                                     )}
 
                                     <button
@@ -6103,26 +6204,86 @@ export default function DashboardPage() {
 
             <form onSubmit={handleSaveProcessLink}>
               <div className={styles.modalBody}>
+                {/* Dependency (dependsOn) Selection */}
+                <div className="input-group">
+                  <label className="input-label" style={{ display: "flex", justifyContent: "space-between" }}>
+                    <span>Abhängigkeit (dependsOn)</span>
+                    <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>Prozess-Hierarchie</span>
+                  </label>
+                  <select
+                    value={targetDependsOn}
+                    onChange={(e) => {
+                      setTargetDependsOn(e.target.value);
+                      if (e.target.value) {
+                        setTargetDbId("");
+                      }
+                    }}
+                    className={styles.selectField}
+                  >
+                    <option value="">-- Keine Abhängigkeit (Eigenständig) --</option>
+                    {processes
+                      .filter(p => p.name !== editingProcessName)
+                      .map((p) => (
+                        <option key={p.name} value={p.name}>
+                          {p.name} (PM2: {p.status === "online" ? "Online" : "Gestoppt"})
+                        </option>
+                      ))}
+                    {discoveredProjects
+                      .filter(dp => dp.name !== editingProcessName)
+                      .flatMap(dp => dp.services?.map(s => `${dp.name}/${s.name}`) || [dp.name])
+                      .filter(n => !processes.some(p => p.name === n))
+                      .map(pName => (
+                        <option key={pName} value={pName}>
+                          Projekt / Service: {pName}
+                        </option>
+                      ))}
+                  </select>
+                  <p className={styles.helperText}>
+                    💡 Wenn ausgewählt, erbt dieser Dienst <strong>vollautomatisch die Datenbank</strong> des abhängigen Prozesses!
+                  </p>
+                </div>
+
                 {/* Database Selection */}
                 <div className="input-group">
                   <label className="input-label" style={{ display: "flex", justifyContent: "space-between" }}>
                     <span>Datenbank</span>
                     <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>Zentraler DB-Pool</span>
                   </label>
-                  <select
-                    value={targetDbId}
-                    onChange={(e) => setTargetDbId(e.target.value)}
-                    className={styles.selectField}
-                  >
-                    <option value="">-- Keine Datenbank verknüpfen --</option>
-                    {registeredDbs.map((db) => (
-                      <option key={db.id} value={db.id}>
-                        {db.alias} ({db.type.toUpperCase()}: {db.database} auf Port {db.port})
-                      </option>
-                    ))}
-                  </select>
+                  {targetDependsOn ? (
+                    <div style={{
+                      padding: "0.6rem 0.85rem",
+                      background: "rgba(99, 102, 241, 0.08)",
+                      border: "1px solid rgba(99, 102, 241, 0.3)",
+                      borderRadius: "var(--radius-md)",
+                      fontSize: "0.85rem",
+                      color: "#c7d2fe",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "0.5rem"
+                    }}>
+                      <span>🔒</span>
+                      <span>
+                        Wird <strong>automatisch geerbt</strong> von <code>{targetDependsOn}</code>.
+                      </span>
+                    </div>
+                  ) : (
+                    <select
+                      value={targetDbId}
+                      onChange={(e) => setTargetDbId(e.target.value)}
+                      className={styles.selectField}
+                    >
+                      <option value="">-- Keine Datenbank verknüpfen --</option>
+                      {registeredDbs.map((db) => (
+                        <option key={db.id} value={db.id}>
+                          {db.alias} ({db.type.toUpperCase()}: {db.database} auf Port {db.port})
+                        </option>
+                      ))}
+                    </select>
+                  )}
                   <p className={styles.helperText}>
-                    💡 Eine Datenbank kann problemlos von mehreren Projekten oder Prozessen gemeinsam genutzt werden.
+                    {targetDependsOn 
+                      ? "Die Datenbank wird zentral am Ziel-Prozess konfiguriert und hier automatisch übernommen."
+                      : "💡 Eine Datenbank kann problemlos von mehreren Projekten oder Prozessen gemeinsam genutzt werden."}
                   </p>
                 </div>
 

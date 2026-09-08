@@ -18,7 +18,7 @@ export async function GET() {
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { processName, dbId, port, domain } = body;
+    const { processName, dbId, port, domain, dependsOn } = body;
 
     if (!processName || typeof processName !== "string") {
       return NextResponse.json({ error: "Missing or invalid processName" }, { status: 400 });
@@ -33,14 +33,16 @@ export async function POST(request: Request) {
     const cleanDbId = dbId ? String(dbId).trim() : undefined;
     const cleanPort = port ? String(port).trim() : undefined;
     const cleanDomain = domain ? String(domain).trim() : undefined;
+    const cleanDependsOn = dependsOn ? String(dependsOn).trim() : undefined;
 
-    if (!cleanDbId && !cleanPort && !cleanDomain) {
+    if (!cleanDbId && !cleanPort && !cleanDomain && !cleanDependsOn) {
       delete store.processLinks[processName];
     } else {
       store.processLinks[processName] = {
         dbId: cleanDbId,
         port: cleanPort,
-        domain: cleanDomain
+        domain: cleanDomain,
+        dependsOn: cleanDependsOn
       };
     }
 
