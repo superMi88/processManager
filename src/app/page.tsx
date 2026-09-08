@@ -77,11 +77,21 @@ interface BackupFileInfo {
   path: string;
 }
 
+interface ServiceDependency {
+  project?: string;
+  service?: string;
+  process?: string;
+  plugin?: string;
+  required?: boolean;
+  description?: string;
+}
+
 interface ProjectServiceDeclaration {
   name: string;
   envPath?: string;
   pm2Process?: string;
   domain?: string;
+  dependsOn?: string | (string | ServiceDependency)[];
   requirements: ProjectRequirement[];
   links?: Record<string, string>;
 }
@@ -92,6 +102,7 @@ interface DiscoveredProject {
   repository?: string;
   category?: string;
   pm2Process?: string;
+  dependsOn?: string | (string | ServiceDependency)[];
   services?: ProjectServiceDeclaration[];
   requirements: ProjectRequirement[];
   links: Record<string, string>;
@@ -975,8 +986,8 @@ export default function DashboardPage() {
 
     // Resolve Dependency & Inherited DB
     const explicitDependsOn = explicit?.dependsOn;
-    const serviceDependsOn = (matchedService as any)?.dependsOn;
-    const projectDependsOn = (matchedProj as any)?.dependsOn;
+    const serviceDependsOn = matchedService?.dependsOn;
+    const projectDependsOn = matchedProj?.dependsOn;
     const effectiveDependsOnRaw = explicitDependsOn || serviceDependsOn || projectDependsOn;
 
     let resolvedDependsOn: string | null = null;

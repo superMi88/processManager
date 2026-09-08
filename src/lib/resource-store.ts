@@ -301,7 +301,7 @@ export function resolveServiceDependency(
   plugin?: string;
 } | null {
   const procName = service.pm2Process || service.name || "";
-  let depRaw = service.dependsOn || store.processLinks?.[procName]?.dependsOn;
+  const depRaw = service.dependsOn || store.processLinks?.[procName]?.dependsOn;
 
   if (!depRaw) return null;
 
@@ -406,7 +406,7 @@ export function generateEnvContent(
   let dbHandled = false;
 
   for (const req of reqs) {
-    let resourceId = projectLinks[req.key];
+    const resourceId = projectLinks[req.key];
     let value = "";
     
     if (req.type === "database" || req.key === "DATABASE_URL") {
