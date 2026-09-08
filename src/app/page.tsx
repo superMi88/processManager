@@ -1131,6 +1131,57 @@ export default function DashboardPage() {
     };
   }, [processLinks, discoveredProjects, registeredDbs, registeredCreds, scannedPorts, registeredDomains, databases]);
 
+  const resolveDependencyProcess = useCallback((dependsOnStr: string): { proc: ProcessInfo | null; displayName: string; pm2Name: string } => {
+    const parts = dependsOnStr.split("/");
+    const targetProject = parts.length > 1 ? parts[0].trim() : null;
+    const targetService = parts[parts.length - 1].trim();
+
+    let expectedPm2Name: string | null = null;
+    for (const proj of discoveredProjects) {
+      const projMatch = !targetProject || 
+        proj.name.toLowerCase() === targetProject.toLowerCase() || 
+        proj.name.toLowerCase().replace(/[-_]/g, "") === targetProject.toLowerCase().replace(/[-_]/g, "");
+      
+      if (projMatch) {
+        if (proj.services && proj.services.length > 0) {
+          const foundSvc = proj.services.find(s => 
+            s.name.toLowerCase() === targetService.toLowerCase() ||
+            s.name.toLowerCase().replace(/[-_]/g, "") === targetService.toLowerCase().replace(/[-_]/g, "") ||
+            (s.pm2Process && s.pm2Process.toLowerCase() === targetService.toLowerCase()) ||
+            (s.pm2Process && s.pm2Process.toLowerCase().replace(/[-_]/g, "") === targetService.toLowerCase().replace(/[-_]/g, ""))
+          );
+          if (foundSvc && foundSvc.pm2Process) {
+            expectedPm2Name = foundSvc.pm2Process;
+            break;
+          }
+        }
+        if (proj.pm2Process) {
+          expectedPm2Name = proj.pm2Process;
+        }
+      }
+    }
+
+    const targetNorm = targetService.toLowerCase().replace(/[-_]/g, "");
+    const expectedNorm = expectedPm2Name?.toLowerCase().replace(/[-_]/g, "");
+
+    const proc = processes.find(p => {
+      const pNorm = p.name.toLowerCase().replace(/[-_]/g, "");
+      if (expectedPm2Name && (p.name.toLowerCase() === expectedPm2Name.toLowerCase() || pNorm === expectedNorm)) {
+        return true;
+      }
+      if (p.name.toLowerCase() === targetService.toLowerCase() || pNorm === targetNorm) {
+        return true;
+      }
+      return false;
+    }) || null;
+
+    return {
+      proc,
+      displayName: targetService,
+      pm2Name: proc?.name || expectedPm2Name || targetService
+    };
+  }, [discoveredProjects, processes]);
+
   const openProcessLinkModal = (procName: string) => {
     const res = getProcessResources(procName);
     const existing = processLinks[procName];
@@ -2643,23 +2694,19 @@ export default function DashboardPage() {
 
                                       {/* Dependency Badge */}
                                       {res.dependsOn && (() => {
-                                        const targetProc = processes.find(p => 
-                                          p.name.toLowerCase() === res.dependsOn!.toLowerCase() ||
-                                          p.name.toLowerCase().replace(/[-_]/g, "") === res.dependsOn!.toLowerCase().replace(/[-_]/g, "")
-                                        );
+                                        const { proc: targetProc, displayName, pm2Name } = resolveDependencyProcess(res.dependsOn!);
                                         const isTargetOnline = targetProc?.status === "online";
-                                        const targetProcName = targetProc?.name || res.dependsOn;
 
                                         return (
                                           <span
                                             className={`${styles.dependencyBadge} ${isTargetOnline ? styles.dependencyBadgeOnline : styles.dependencyBadgeOffline}`}
-                                            title={isTargetOnline ? `Hängt ab von: ${res.dependsOn} (Online)` : `Achtung: Benötigter Prozess ${res.dependsOn} ist offline!`}
+                                            title={isTargetOnline ? `Hängt ab von: ${res.dependsOn} (PM2: ${pm2Name} ● Online)` : `Achtung: Benötigter Prozess ${displayName} (PM2: ${pm2Name}) ist offline!`}
                                           >
                                             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                                               <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
                                               <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
                                             </svg>
-                                            <span>Benötigt: {res.dependsOn}</span>
+                                            <span>Benötigt: {displayName}</span>
                                             <span style={{ fontSize: "0.68rem" }}>{isTargetOnline ? "●" : "⚠️ Offline"}</span>
                                             {!isTargetOnline && (
                                               <button
@@ -2667,9 +2714,9 @@ export default function DashboardPage() {
                                                 className={styles.dependencyBadgeAction}
                                                 onClick={(e) => {
                                                   e.stopPropagation();
-                                                  handleProcessAction(targetProcName, "start");
+                                                  handleProcessAction(pm2Name, "start");
                                                 }}
-                                                title={`${targetProcName} starten`}
+                                                title={`${pm2Name} starten`}
                                               >
                                                 ▶ Starten
                                               </button>
@@ -2911,18 +2958,24 @@ export default function DashboardPage() {
                                     )}
 
                                     {/* Dependency Badge */}
-                                    {res.dependsOn && (
-                                      <span
-                                        className={`${styles.dependencyBadge} ${styles.dependencyBadgeOnline}`}
-                                        title={`Hängt ab von: ${res.dependsOn}`}
-                                      >
-                                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                          <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
-                                          <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
-                                        </svg>
-                                        <span>Benötigt: {res.dependsOn}</span>
-                                      </span>
-                                    )}
+                                    {res.dependsOn && (() => {
+                                      const { proc: targetProc, displayName, pm2Name } = resolveDependencyProcess(res.dependsOn!);
+                                      const isTargetOnline = targetProc?.status === "online";
+
+                                      return (
+                                        <span
+                                          className={`${styles.dependencyBadge} ${isTargetOnline ? styles.dependencyBadgeOnline : styles.dependencyBadgeOffline}`}
+                                          title={isTargetOnline ? `Hängt ab von: ${res.dependsOn} (PM2: ${pm2Name} ● Online)` : `Achtung: Benötigter Prozess ${displayName} (PM2: ${pm2Name}) ist offline!`}
+                                        >
+                                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                            <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+                                            <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+                                          </svg>
+                                          <span>Benötigt: {displayName}</span>
+                                          <span style={{ fontSize: "0.68rem" }}>{isTargetOnline ? "●" : "⚠️ Offline"}</span>
+                                        </span>
+                                      );
+                                    })()}
 
                                     <button
                                       type="button"
